@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,11 +24,10 @@ MODULE ewald_spline_util
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
-   USE message_passing,                 ONLY: mp_para_env_type
+   USE message_passing,                 ONLY: mp_comm_self
    USE pw_grid_types,                   ONLY: HALFSPACE,&
                                               pw_grid_type
-   USE pw_grids,                        ONLY: pw_grid_create,&
-                                              pw_grid_setup
+   USE pw_grids,                        ONLY: pw_grid_create
    USE pw_methods,                      ONLY: pw_zero
    USE pw_pool_types,                   ONLY: pw_pool_create,&
                                               pw_pool_type
@@ -63,13 +62,12 @@ CONTAINS
 !> \param param_section ...
 !> \param tag ...
 !> \param print_section ...
-!> \param para_env ...
 !> \par History
 !>      12.2005 created [tlaino]
 !> \author Teodoro Laino
 ! **************************************************************************************************
    SUBROUTINE Setup_Ewald_Spline(pw_grid, pw_pool, coeff, LG, gx, gy, gz, hmat, npts, &
-                                 param_section, tag, print_section, para_env)
+                                 param_section, tag, print_section)
       TYPE(pw_grid_type), POINTER                        :: pw_grid
       TYPE(pw_pool_type), POINTER                        :: pw_pool
       TYPE(pw_r3d_rs_type), POINTER                      :: coeff
@@ -79,7 +77,6 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: param_section
       CHARACTER(LEN=*), INTENT(IN)                       :: tag
       TYPE(section_vals_type), POINTER                   :: print_section
-      TYPE(mp_para_env_type), POINTER                    :: para_env
 
       INTEGER                                            :: bo(2, 3), iounit
       TYPE(cell_type), POINTER                           :: cell
@@ -95,14 +92,13 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(coeff))
       NULLIFY (cell)
 
-      CALL cell_create(cell, hmat=hmat, periodic=(/1, 1, 1/))
-      CALL pw_grid_create(pw_grid, para_env, local=.TRUE.)
+      CALL cell_create(cell, hmat=hmat, periodic=[1, 1, 1])
       logger => cp_get_default_logger()
       iounit = cp_print_key_unit_nr(logger, print_section, "", &
                                     extension=".Log")
       bo(1, 1:3) = 0
       bo(2, 1:3) = npts(1:3) - 1
-      CALL pw_grid_setup(cell%hmat, pw_grid, grid_span=HALFSPACE, bounds=bo, iounit=iounit)
+      CALL pw_grid_create(pw_grid, mp_comm_self, cell%hmat, grid_span=HALFSPACE, bounds=bo, iounit=iounit)
 
       CALL cp_print_key_finished_output(iounit, logger, print_section, &
                                         "")
@@ -221,15 +217,15 @@ CONTAINS
 
       !NB use DGEMM to compute sum over kg for each i, j, k
       ! number of elements per node, round down
-      NLg_loc = SIZE(Lg)/grid%pw_grid%para%group_size
+      NLg_loc = SIZE(Lg)/grid%pw_grid%para%group%num_pe
       ! number of extra elements not yet accounted for
-      n_extra = MOD(SIZE(Lg), grid%pw_grid%para%group_size)
+      n_extra = MOD(SIZE(Lg), grid%pw_grid%para%group%num_pe)
       ! first n_extra nodes get NLg_loc+1, remaining get NLg_loc
-      IF (grid%pw_grid%para%my_pos < n_extra) THEN
-         Lg_loc_min = (NLg_loc + 1)*grid%pw_grid%para%my_pos + 1
+      IF (grid%pw_grid%para%group%mepos < n_extra) THEN
+         Lg_loc_min = (NLg_loc + 1)*grid%pw_grid%para%group%mepos + 1
          Lg_loc_max = Lg_loc_min + (NLg_loc + 1) - 1
       ELSE
-         Lg_loc_min = (NLg_loc + 1)*n_extra + NLg_loc*(grid%pw_grid%para%my_pos - n_extra) + 1
+         Lg_loc_min = (NLg_loc + 1)*n_extra + NLg_loc*(grid%pw_grid%para%group%mepos - n_extra) + 1
          Lg_loc_max = Lg_loc_min + NLg_loc - 1
       END IF
       ! shouldn't be necessary
@@ -394,18 +390,18 @@ CONTAINS
             dzTerm = 0.0_dp
             ! Sum over k vectors
             DO kg = 1, SIZE(Lg)
-               vec = (/REAL(gx(kg), KIND=dp), REAL(gy(kg), KIND=dp), REAL(gz(kg), KIND=dp)/)
+               vec = [REAL(gx(kg), KIND=dp), REAL(gy(kg), KIND=dp), REAL(gz(kg), KIND=dp)]
                Term = Term + lg(kg)*COS(vec(1)*xs1 + vec(2)*xs2 + vec(3)*xs3)
                dxTerm = dxTerm - lg(kg)*SIN(vec(1)*xs1 + vec(2)*xs2 + vec(3)*xs3)*vec(1)
                dyTerm = dyTerm - lg(kg)*SIN(vec(1)*xs1 + vec(2)*xs2 + vec(3)*xs3)*vec(2)
                dzTerm = dzTerm - lg(kg)*SIN(vec(1)*xs1 + vec(2)*xs2 + vec(3)*xs3)*vec(3)
             END DO
             Na = SQRT(dxTerm*dxTerm + dyTerm*dyTerm + dzTerm*dzTerm)
-            dn = Eval_d_Interp_Spl3_pbc((/xs1, xs2, xs3/), TabLR)
+            dn = Eval_d_Interp_Spl3_pbc([xs1, xs2, xs3], TabLR)
             Nn = SQRT(DOT_PRODUCT(dn, dn))
-            Fterm = Eval_Interp_Spl3_pbc((/xs1, xs2, xs3/), TabLR)
+            Fterm = Eval_Interp_Spl3_pbc([xs1, xs2, xs3], TabLR)
             tmp1 = ABS(Term - Fterm)
-            tmp2 = SQRT(DOT_PRODUCT(dn - (/dxTerm, dyTerm, dzTerm/), dn - (/dxTerm, dyTerm, dzTerm/)))
+            tmp2 = SQRT(DOT_PRODUCT(dn - [dxTerm, dyTerm, dzTerm], dn - [dxTerm, dyTerm, dzTerm]))
             errf = errf + tmp1
             maxerrorf = MAX(maxerrorf, tmp1)
             errd = errd + tmp2

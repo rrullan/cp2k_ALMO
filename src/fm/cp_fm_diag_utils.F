@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -48,7 +48,7 @@ MODULE cp_fm_diag_utils
       LOGICAL :: redistribute = .FALSE. ! whether or not the matrix was actually redistributed
    CONTAINS
       PROCEDURE, PASS(self) :: write => cp_fm_redistribute_info_write
-   END TYPE
+   END TYPE cp_fm_redistribute_info
 
    ! Container for redistribution settings and temporary work structs
    TYPE cp_fm_redistribute_type
@@ -172,7 +172,7 @@ CONTAINS
 
    END FUNCTION cp_fm_diag_get_optimal_ncpu
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 ! **************************************************************************************************
 !> \brief  Determines the largest number of CPUs a matrix can be distributed on without any of the
 !>         processors getting a zero-width column (currently only needed for ELPA).
@@ -216,7 +216,7 @@ CONTAINS
          gcd_max = -1
          DO ipe = 1, CEILING(SQRT(REAL(ncpu, dp)))
             jpe = ncpu/ipe
-            IF (ipe*jpe .NE. ncpu) &
+            IF (ipe*jpe /= ncpu) &
                CYCLE
             IF (gcd(ipe, jpe) >= gcd_max) THEN
                npcol = jpe
@@ -272,7 +272,7 @@ CONTAINS
       LOGICAL                                  :: is_elpa
       TYPE(cp_fm_redistribute_info), OPTIONAL, INTENT(OUT) :: redist_info
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       REAL(KIND=dp)                            :: fake_local_data(1, 1)
       INTEGER                                  :: fake_descriptor(9), mepos_old, &
                                                   io_unit, ngroups, ncol_block, blksize, nrow_block
@@ -292,7 +292,7 @@ CONTAINS
 #endif
       END IF
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       logger => cp_get_default_logger()
       io_unit = cp_logger_get_default_io_unit(logger)
@@ -371,7 +371,7 @@ CONTAINS
          ! split comm, the first num_pe_new tasks will do the work
          ALLOCATE (work_redistribute%group_distribution(0:rdinfo%num_pe_old - 1))
          ALLOCATE (work_redistribute%group_partition(0:1))
-         work_redistribute%group_partition = (/rdinfo%num_pe_new, rdinfo%num_pe_old - rdinfo%num_pe_new/)
+         work_redistribute%group_partition = [rdinfo%num_pe_new, rdinfo%num_pe_old - rdinfo%num_pe_new]
          ALLOCATE (work_redistribute%para_env_new)
          CALL work_redistribute%para_env_new%from_split( &
             comm=para_env, ngroups=ngroups, group_distribution=work_redistribute%group_distribution, &
@@ -461,7 +461,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_redistribute_end'
 
       INTEGER                                  :: handle
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       REAL(KIND=dp)                            :: fake_local_data(1, 1)
       INTEGER                                  :: fake_descriptor(9), mepos_old, n
       TYPE(mp_para_env_type), POINTER          :: para_env
@@ -469,7 +469,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       ! Check if matrix was redistributed
       IF (ASSOCIATED(work_redistribute%group_distribution)) THEN

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,16 +13,24 @@
 !> \author JGH
 ! **************************************************************************************************
 MODULE kpoint_types
+   USE cell_types,                      ONLY: cell_type
    USE cp_blacs_env,                    ONLY: cp_blacs_env_release,&
                                               cp_blacs_env_type
+   USE cp_cfm_types,                    ONLY: cp_cfm_release,&
+                                              cp_cfm_type
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
    USE input_cp2k_kpoints,              ONLY: use_complex_wfn,&
-                                              use_real_wfn
+                                              use_k290_kpoint_backend,&
+                                              use_k290_kpoint_symmetry,&
+                                              use_real_wfn,&
+                                              use_spglib_kpoint_backend,&
+                                              use_spglib_kpoint_symmetry
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -49,10 +57,11 @@ MODULE kpoint_types
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'kpoint_types'
 
    PUBLIC :: kpoint_type
-   PUBLIC :: kpoint_create, kpoint_release, get_kpoint_info, set_kpoint_info
+   PUBLIC :: kpoint_create, kpoint_release, kpoint_reset_initialization, get_kpoint_info, set_kpoint_info
    PUBLIC :: read_kpoint_section, write_kpoint_info
    PUBLIC :: kpoint_env_type, kpoint_env_p_type
    PUBLIC :: kpoint_env_create, get_kpoint_env
+   PUBLIC :: kind_rotmat_type
    PUBLIC :: kpoint_sym_type
    PUBLIC :: kpoint_sym_create
 
@@ -67,23 +76,36 @@ MODULE kpoint_types
 !> \param wmat      associated energy weighted density matrix (r/i,spin)
 !> \param smat      associated overlap matrix (for ADMM) (r/i,spin)
 !> \param amat      associated ADMM basis projection matrix (r/i,spin)
+!> \param shalf     S(K)^(1/2) DFT+U Lowdin method (real wfn)
+!> \param cshalf    S(K)^(1/2) DFT+U Lowdin method (complex wfn)
 !> \author JGH
 ! **************************************************************************************************
    TYPE kpoint_env_type
-      INTEGER                                           :: nkpoint
-      REAL(KIND=dp)                                     :: wkp
-      REAL(KIND=dp), DIMENSION(3)                       :: xkp
-      LOGICAL                                           :: is_local
-      TYPE(mo_set_type), DIMENSION(:, :), POINTER     :: mos
-      TYPE(cp_fm_type), DIMENSION(:, :), POINTER      :: pmat
-      TYPE(cp_fm_type), DIMENSION(:, :), POINTER      :: wmat
-      TYPE(cp_fm_type), DIMENSION(:, :), POINTER      :: smat
-      TYPE(cp_fm_type), DIMENSION(:, :), POINTER      :: amat
+      INTEGER                                           :: nkpoint = -1
+      REAL(KIND=dp)                                     :: wkp = 0.0_dp
+      REAL(KIND=dp), DIMENSION(3)                       :: xkp = 0.0_dp
+      LOGICAL                                           :: is_local = .FALSE.
+      TYPE(mo_set_type), DIMENSION(:, :), POINTER       :: mos => NULL()
+      TYPE(cp_fm_type), DIMENSION(:, :), POINTER        :: pmat => NULL()
+      TYPE(cp_fm_type), DIMENSION(:, :), POINTER        :: wmat => NULL()
+      TYPE(cp_fm_type), DIMENSION(:, :), POINTER        :: smat => NULL()
+      TYPE(cp_fm_type), DIMENSION(:, :), POINTER        :: amat => NULL()
+      TYPE(cp_fm_type)                                  :: shalf
+      TYPE(cp_cfm_type)                                 :: cshalf
    END TYPE kpoint_env_type
 
    TYPE kpoint_env_p_type
-      TYPE(kpoint_env_type), POINTER                    :: kpoint_env
+      TYPE(kpoint_env_type), POINTER                    :: kpoint_env => NULL()
    END TYPE kpoint_env_p_type
+
+! **************************************************************************************************
+!> \brief Rotation matrices for basis sets
+!> \param rmat      atom basis function rotation matrix
+!> \author JGH
+! **************************************************************************************************
+   TYPE kind_rotmat_type
+      REAL(KIND=dp), DIMENSION(:, :), POINTER           :: rmat => NULL()
+   END TYPE kind_rotmat_type
 
 ! **************************************************************************************************
 !> \brief Keeps symmetry information about a specific k-point
@@ -92,18 +114,24 @@ MODULE kpoint_types
 !> \param xkp       kpoint coordinates
 !> \param rot       rotation matrices
 !> \param f0        atom permutation
+!> \param fcell     atom cell shifts generated by the symmetry operation
+!> \param kgphase   atom Bloch gauge from reciprocal-lattice folding of the mapped k-point
 !> \author JGH
 ! **************************************************************************************************
    TYPE kpoint_sym_type
-      LOGICAL                                           :: apply_symmetry
-      INTEGER                                           :: nwght
-      REAL(KIND=dp), DIMENSION(:, :), POINTER           :: xkp
-      REAL(KIND=dp), DIMENSION(:, :, :), POINTER        :: rot
-      INTEGER, DIMENSION(:, :), POINTER                 :: f0
+      LOGICAL                                           :: apply_symmetry = .FALSE.
+      INTEGER                                           :: nwght = -1
+      INTEGER                                           :: nwred = -1
+      REAL(KIND=dp), DIMENSION(:, :), POINTER           :: xkp => NULL()
+      REAL(KIND=dp), DIMENSION(:, :, :), POINTER        :: rot => NULL()
+      INTEGER, DIMENSION(:), POINTER                    :: rotp => NULL()
+      INTEGER, DIMENSION(:, :), POINTER                 :: f0 => NULL()
+      INTEGER, DIMENSION(:, :, :), POINTER              :: fcell => NULL()
+      REAL(KIND=dp), DIMENSION(:, :), POINTER           :: kgphase => NULL()
    END TYPE kpoint_sym_type
 
    TYPE kpoint_sym_p_type
-      TYPE(kpoint_sym_type), POINTER                    :: kpoint_sym
+      TYPE(kpoint_sym_type), POINTER                    :: kpoint_sym => NULL()
    END TYPE kpoint_sym_p_type
 
 ! **************************************************************************************************
@@ -116,12 +144,17 @@ MODULE kpoint_types
 !> \param use_real_wfn        [input] real/complex wfn
 !> \param symmetry            [input] use symmetry (atoms) to reduce kpoints
 !> \param full_grid           [input] don't reduce kpoints at all
+!> \param inversion_symmetry_only [input] reduce kpoints only by inversion symmetry
+!> \param symmetry_backend [input] k-point symmetry backend
+!> \param symmetry_reduction_method [input] k-point symmetry reduction method
 !> \param verbose             [input] more output information
 !> \param eps_geo             [input] accuracy of atom symmetry detection
 !> \param parallel_group_size [input] kpoint group size
 !> \param nkp     number of kpoints
 !> \param xkp     kpoint coordinates
 !> \param wkp     kpoint weights
+!> \param xkp_input explicit GENERAL kpoint coordinates as read from the input
+!> \param wkp_input explicit GENERAL kpoint weights as read from the input
 !> \param para_env 'global' parallel environment
 !> \param para_env_kp parallel environment of the kpoint calculation
 !> \param para_env_inter_kp parallel environment between kpoints
@@ -136,27 +169,33 @@ MODULE kpoint_types
 !> \author JGH
 ! **************************************************************************************************
    TYPE kpoint_type
-      CHARACTER(LEN=default_string_length)    :: kp_scheme
-      INTEGER, DIMENSION(3)                   :: nkp_grid
-      REAL(KIND=dp), DIMENSION(3)             :: kp_shift
-      LOGICAL                                 :: use_real_wfn
-      LOGICAL                                 :: symmetry
-      LOGICAL                                 :: full_grid
-      LOGICAL                                 :: verbose
-      REAL(KIND=dp)                           :: eps_geo
-      INTEGER                                 :: parallel_group_size
-      INTEGER                                 :: nkp
+      CHARACTER(LEN=default_string_length)    :: kp_scheme = ""
+      INTEGER, DIMENSION(3)                   :: nkp_grid = -1
+      REAL(KIND=dp), DIMENSION(3)             :: kp_shift = 0.0_dp
+      LOGICAL                                 :: gamma_centered = .FALSE.
+      LOGICAL                                 :: use_real_wfn = .FALSE.
+      LOGICAL                                 :: symmetry = .FALSE.
+      LOGICAL                                 :: full_grid = .FALSE.
+      LOGICAL                                 :: inversion_symmetry_only = .FALSE.
+      INTEGER                                 :: symmetry_backend = use_k290_kpoint_backend
+      INTEGER                                 :: symmetry_reduction_method = use_k290_kpoint_symmetry
+      LOGICAL                                 :: verbose = .FALSE.
+      REAL(KIND=dp)                           :: eps_geo = 0.0_dp
+      INTEGER                                 :: parallel_group_size = -1
+      INTEGER                                 :: nkp = -1
       REAL(KIND=dp), DIMENSION(:, :), POINTER :: xkp => Null()
       REAL(KIND=dp), DIMENSION(:), POINTER    :: wkp => Null()
+      REAL(KIND=dp), DIMENSION(:, :), POINTER :: xkp_input => Null()
+      REAL(KIND=dp), DIMENSION(:), POINTER    :: wkp_input => Null()
       ! parallel environment
       TYPE(mp_para_env_type), POINTER         :: para_env => Null()
       TYPE(cp_blacs_env_type), POINTER        :: blacs_env_all => Null()
       TYPE(mp_para_env_type), POINTER         :: para_env_kp => Null(), &
                                                  para_env_inter_kp => Null()
-      LOGICAL                                 :: iogrp
-      INTEGER                                 :: nkp_groups
+      LOGICAL                                 :: iogrp = .FALSE.
+      INTEGER                                 :: nkp_groups = -1
       INTEGER, DIMENSION(:, :), POINTER       :: kp_dist => Null()
-      INTEGER, DIMENSION(2)                   :: kp_range
+      INTEGER, DIMENSION(2)                   :: kp_range = -1
       TYPE(cp_blacs_env_type), POINTER        :: blacs_env => Null()
       INTEGER, DIMENSION(:, :, :), POINTER    :: cell_to_index => Null()
       INTEGER, DIMENSION(:, :), POINTER       :: index_to_cell => Null()
@@ -168,8 +207,14 @@ MODULE kpoint_types
          POINTER                              :: kp_env => Null()
       TYPE(kpoint_env_p_type), DIMENSION(:), &
          POINTER                              :: kp_aux_env => Null()
+      ! symmetry
       TYPE(kpoint_sym_p_type), DIMENSION(:), &
          POINTER                              :: kp_sym => Null()
+      INTEGER, DIMENSION(:), POINTER          :: atype => Null()
+      INTEGER, DIMENSION(:), POINTER          :: ibrot => Null()
+      TYPE(kind_rotmat_type), DIMENSION(:, :), &
+         POINTER                              :: kind_rotmat => Null()
+      ! pools
       TYPE(qs_matrix_pools_type), POINTER     :: mpools => Null()
       TYPE(qs_diis_buffer_type_kp), POINTER   :: scf_diis_buffer => Null()
       TYPE(qs_matrix_pools_type), POINTER     :: mpools_aux_fit => Null()
@@ -194,9 +239,13 @@ CONTAINS
       kpoint%kp_scheme = ""
       kpoint%nkp_grid = 0
       kpoint%kp_shift = 0.0_dp
+      kpoint%gamma_centered = .FALSE.
       kpoint%symmetry = .FALSE.
       kpoint%verbose = .FALSE.
       kpoint%full_grid = .FALSE.
+      kpoint%inversion_symmetry_only = .FALSE.
+      kpoint%symmetry_backend = use_k290_kpoint_backend
+      kpoint%symmetry_reduction_method = use_k290_kpoint_symmetry
       kpoint%use_real_wfn = .FALSE.
       kpoint%eps_geo = 1.0e-6_dp
       kpoint%parallel_group_size = -1
@@ -204,6 +253,7 @@ CONTAINS
       kpoint%nkp = 0
 
       NULLIFY (kpoint%xkp, kpoint%wkp)
+      NULLIFY (kpoint%xkp_input, kpoint%wkp_input)
       NULLIFY (kpoint%kp_dist)
 
       NULLIFY (kpoint%para_env)
@@ -233,7 +283,7 @@ CONTAINS
    SUBROUTINE kpoint_release(kpoint)
       TYPE(kpoint_type), POINTER                         :: kpoint
 
-      INTEGER                                            :: ik
+      INTEGER                                            :: i, ik, j
 
       IF (ASSOCIATED(kpoint)) THEN
 
@@ -242,6 +292,12 @@ CONTAINS
          END IF
          IF (ASSOCIATED(kpoint%wkp)) THEN
             DEALLOCATE (kpoint%wkp)
+         END IF
+         IF (ASSOCIATED(kpoint%xkp_input)) THEN
+            DEALLOCATE (kpoint%xkp_input)
+         END IF
+         IF (ASSOCIATED(kpoint%wkp_input)) THEN
+            DEALLOCATE (kpoint%wkp_input)
          END IF
          IF (ASSOCIATED(kpoint%kp_dist)) THEN
             DEALLOCATE (kpoint%kp_dist)
@@ -281,6 +337,20 @@ CONTAINS
             DEALLOCATE (kpoint%kp_sym)
          END IF
 
+         IF (ASSOCIATED(kpoint%atype)) DEALLOCATE (kpoint%atype)
+         IF (ASSOCIATED(kpoint%ibrot)) DEALLOCATE (kpoint%ibrot)
+
+         IF (ASSOCIATED(kpoint%kind_rotmat)) THEN
+            DO i = 1, SIZE(kpoint%kind_rotmat, 1)
+               DO j = 1, SIZE(kpoint%kind_rotmat, 2)
+                  IF (ASSOCIATED(kpoint%kind_rotmat(i, j)%rmat)) THEN
+                     DEALLOCATE (kpoint%kind_rotmat(i, j)%rmat)
+                  END IF
+               END DO
+            END DO
+            DEALLOCATE (kpoint%kind_rotmat)
+         END IF
+
          IF (ASSOCIATED(kpoint%scf_diis_buffer)) THEN
             CALL qs_diis_b_release_kp(kpoint%scf_diis_buffer)
             DEALLOCATE (kpoint%scf_diis_buffer)
@@ -291,6 +361,123 @@ CONTAINS
       END IF
 
    END SUBROUTINE kpoint_release
+
+! **************************************************************************************************
+!> \brief Reset all data derived from a concrete k-point initialization.
+!>        Input options such as the scheme, grid, shifts and symmetry settings are kept.
+!> \param kpoint  The kpoint environment
+! **************************************************************************************************
+   SUBROUTINE kpoint_reset_initialization(kpoint)
+      TYPE(kpoint_type), INTENT(INOUT)                   :: kpoint
+
+      INTEGER                                            :: i, ik, j
+
+      IF (ASSOCIATED(kpoint%xkp)) THEN
+         DEALLOCATE (kpoint%xkp)
+         NULLIFY (kpoint%xkp)
+      END IF
+      IF (ASSOCIATED(kpoint%wkp)) THEN
+         DEALLOCATE (kpoint%wkp)
+         NULLIFY (kpoint%wkp)
+      END IF
+      IF (kpoint%kp_scheme == "GENERAL" .AND. ASSOCIATED(kpoint%xkp_input) .AND. &
+          ASSOCIATED(kpoint%wkp_input)) THEN
+         kpoint%nkp = SIZE(kpoint%wkp_input)
+         ALLOCATE (kpoint%xkp(3, kpoint%nkp), kpoint%wkp(kpoint%nkp))
+         kpoint%xkp(1:3, 1:kpoint%nkp) = kpoint%xkp_input(1:3, 1:kpoint%nkp)
+         kpoint%wkp(1:kpoint%nkp) = kpoint%wkp_input(1:kpoint%nkp)
+      END IF
+      IF (ASSOCIATED(kpoint%kp_dist)) THEN
+         DEALLOCATE (kpoint%kp_dist)
+         NULLIFY (kpoint%kp_dist)
+      END IF
+
+      CALL mpools_release(kpoint%mpools)
+      CALL mpools_release(kpoint%mpools_aux_fit)
+
+      CALL cp_blacs_env_release(kpoint%blacs_env)
+      CALL cp_blacs_env_release(kpoint%blacs_env_all)
+
+      CALL mp_para_env_release(kpoint%para_env)
+      CALL mp_para_env_release(kpoint%para_env_kp)
+      CALL mp_para_env_release(kpoint%para_env_inter_kp)
+
+      IF (ASSOCIATED(kpoint%cell_to_index)) THEN
+         DEALLOCATE (kpoint%cell_to_index)
+         NULLIFY (kpoint%cell_to_index)
+      END IF
+      IF (ASSOCIATED(kpoint%index_to_cell)) THEN
+         DEALLOCATE (kpoint%index_to_cell)
+         NULLIFY (kpoint%index_to_cell)
+      END IF
+
+      IF (ASSOCIATED(kpoint%kp_env)) THEN
+         DO ik = 1, SIZE(kpoint%kp_env)
+            CALL kpoint_env_release(kpoint%kp_env(ik)%kpoint_env)
+         END DO
+         DEALLOCATE (kpoint%kp_env)
+         NULLIFY (kpoint%kp_env)
+      END IF
+
+      IF (ASSOCIATED(kpoint%kp_aux_env)) THEN
+         DO ik = 1, SIZE(kpoint%kp_aux_env)
+            CALL kpoint_env_release(kpoint%kp_aux_env(ik)%kpoint_env)
+         END DO
+         DEALLOCATE (kpoint%kp_aux_env)
+         NULLIFY (kpoint%kp_aux_env)
+      END IF
+
+      IF (ASSOCIATED(kpoint%kp_sym)) THEN
+         DO ik = 1, SIZE(kpoint%kp_sym)
+            CALL kpoint_sym_release(kpoint%kp_sym(ik)%kpoint_sym)
+         END DO
+         DEALLOCATE (kpoint%kp_sym)
+         NULLIFY (kpoint%kp_sym)
+      END IF
+
+      IF (ASSOCIATED(kpoint%atype)) THEN
+         DEALLOCATE (kpoint%atype)
+         NULLIFY (kpoint%atype)
+      END IF
+      IF (ASSOCIATED(kpoint%ibrot)) THEN
+         DEALLOCATE (kpoint%ibrot)
+         NULLIFY (kpoint%ibrot)
+      END IF
+
+      IF (ASSOCIATED(kpoint%kind_rotmat)) THEN
+         DO i = 1, SIZE(kpoint%kind_rotmat, 1)
+            DO j = 1, SIZE(kpoint%kind_rotmat, 2)
+               IF (ASSOCIATED(kpoint%kind_rotmat(i, j)%rmat)) THEN
+                  DEALLOCATE (kpoint%kind_rotmat(i, j)%rmat)
+                  NULLIFY (kpoint%kind_rotmat(i, j)%rmat)
+               END IF
+            END DO
+         END DO
+         DEALLOCATE (kpoint%kind_rotmat)
+         NULLIFY (kpoint%kind_rotmat)
+      END IF
+
+      IF (ASSOCIATED(kpoint%scf_diis_buffer)) THEN
+         CALL qs_diis_b_release_kp(kpoint%scf_diis_buffer)
+         DEALLOCATE (kpoint%scf_diis_buffer)
+         NULLIFY (kpoint%scf_diis_buffer)
+      END IF
+
+      NULLIFY (kpoint%sab_nl)
+      NULLIFY (kpoint%sab_nl_nosym)
+
+      ALLOCATE (kpoint%cell_to_index(0:0, 0:0, 0:0))
+      kpoint%cell_to_index(:, :, :) = 1
+
+      ALLOCATE (kpoint%index_to_cell(0:0, 0:0))
+      kpoint%index_to_cell(:, :) = 0
+
+      IF (.NOT. ASSOCIATED(kpoint%wkp)) kpoint%nkp = 0
+      kpoint%nkp_groups = 0
+      kpoint%kp_range = 0
+      kpoint%iogrp = .FALSE.
+
+   END SUBROUTINE kpoint_reset_initialization
 
 ! **************************************************************************************************
 !> \brief Retrieve information from a kpoint environment
@@ -323,13 +510,18 @@ CONTAINS
 !> \param index_to_cell ...
 !> \param sab_nl        neighbourlist that defines real space matrices
 !> \param sab_nl_nosym neighbourlist that defines real space matrices, non-symmetric
+!> \param inversion_symmetry_only reduce kpoints only by inversion symmetry
+!> \param symmetry_backend k-point symmetry backend
+!> \param symmetry_reduction_method k-point symmetry reduction method
+!> \param gamma_centered ...
 !> \author JGH
 ! **************************************************************************************************
    SUBROUTINE get_kpoint_info(kpoint, kp_scheme, nkp_grid, kp_shift, symmetry, verbose, &
                               full_grid, use_real_wfn, eps_geo, parallel_group_size, kp_range, nkp, xkp, wkp, &
                               para_env, blacs_env_all, para_env_kp, para_env_inter_kp, blacs_env, &
                               kp_env, kp_aux_env, mpools, iogrp, nkp_groups, kp_dist, cell_to_index, index_to_cell, &
-                              sab_nl, sab_nl_nosym)
+                              sab_nl, sab_nl_nosym, inversion_symmetry_only, symmetry_backend, &
+                              symmetry_reduction_method, gamma_centered)
       TYPE(kpoint_type), INTENT(IN)                      :: kpoint
       CHARACTER(LEN=*), OPTIONAL                         :: kp_scheme
       INTEGER, DIMENSION(3), OPTIONAL                    :: nkp_grid
@@ -356,13 +548,22 @@ CONTAINS
       INTEGER, DIMENSION(:, :), OPTIONAL, POINTER        :: index_to_cell
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: sab_nl, sab_nl_nosym
+      LOGICAL, OPTIONAL                                  :: inversion_symmetry_only
+      INTEGER, OPTIONAL                                  :: symmetry_backend, &
+                                                            symmetry_reduction_method
+      LOGICAL, OPTIONAL                                  :: gamma_centered
 
       IF (PRESENT(kp_scheme)) kp_scheme = kpoint%kp_scheme
       IF (PRESENT(nkp_grid)) nkp_grid = kpoint%nkp_grid
       IF (PRESENT(kp_shift)) kp_shift = kpoint%kp_shift
+      IF (PRESENT(gamma_centered)) gamma_centered = kpoint%gamma_centered
       IF (PRESENT(symmetry)) symmetry = kpoint%symmetry
       IF (PRESENT(verbose)) verbose = kpoint%verbose
       IF (PRESENT(full_grid)) full_grid = kpoint%full_grid
+      IF (PRESENT(inversion_symmetry_only)) inversion_symmetry_only = kpoint%inversion_symmetry_only
+      IF (PRESENT(symmetry_backend)) symmetry_backend = kpoint%symmetry_backend
+      IF (PRESENT(symmetry_reduction_method)) &
+         symmetry_reduction_method = kpoint%symmetry_reduction_method
       IF (PRESENT(use_real_wfn)) use_real_wfn = kpoint%use_real_wfn
       IF (PRESENT(eps_geo)) eps_geo = kpoint%eps_geo
       IF (PRESENT(parallel_group_size)) parallel_group_size = kpoint%parallel_group_size
@@ -424,13 +625,18 @@ CONTAINS
 !> \param index_to_cell ...
 !> \param sab_nl        neighbourlist that defines real space matrices
 !> \param sab_nl_nosym  neighbourlist that defines real space matrices
+!> \param inversion_symmetry_only reduce kpoints only by inversion symmetry
+!> \param symmetry_backend k-point symmetry backend
+!> \param symmetry_reduction_method k-point symmetry reduction method
+!> \param gamma_centered ...
 !> \author JGH
 ! **************************************************************************************************
    SUBROUTINE set_kpoint_info(kpoint, kp_scheme, nkp_grid, kp_shift, symmetry, verbose, &
                               full_grid, use_real_wfn, eps_geo, parallel_group_size, kp_range, nkp, xkp, wkp, &
                               para_env, blacs_env_all, para_env_kp, para_env_inter_kp, blacs_env, &
                               kp_env, kp_aux_env, mpools, iogrp, nkp_groups, kp_dist, cell_to_index, index_to_cell, &
-                              sab_nl, sab_nl_nosym)
+                              sab_nl, sab_nl_nosym, inversion_symmetry_only, symmetry_backend, &
+                              symmetry_reduction_method, gamma_centered)
       TYPE(kpoint_type), INTENT(INOUT)                   :: kpoint
       CHARACTER(LEN=*), OPTIONAL                         :: kp_scheme
       INTEGER, DIMENSION(3), OPTIONAL                    :: nkp_grid
@@ -457,13 +663,22 @@ CONTAINS
       INTEGER, DIMENSION(:, :), OPTIONAL, POINTER        :: index_to_cell
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: sab_nl, sab_nl_nosym
+      LOGICAL, OPTIONAL                                  :: inversion_symmetry_only
+      INTEGER, OPTIONAL                                  :: symmetry_backend, &
+                                                            symmetry_reduction_method
+      LOGICAL, OPTIONAL                                  :: gamma_centered
 
       IF (PRESENT(kp_scheme)) kpoint%kp_scheme = kp_scheme
       IF (PRESENT(nkp_grid)) kpoint%nkp_grid = nkp_grid
       IF (PRESENT(kp_shift)) kpoint%kp_shift = kp_shift
+      IF (PRESENT(gamma_centered)) kpoint%gamma_centered = gamma_centered
       IF (PRESENT(symmetry)) kpoint%symmetry = symmetry
       IF (PRESENT(verbose)) kpoint%verbose = verbose
       IF (PRESENT(full_grid)) kpoint%full_grid = full_grid
+      IF (PRESENT(inversion_symmetry_only)) kpoint%inversion_symmetry_only = inversion_symmetry_only
+      IF (PRESENT(symmetry_backend)) kpoint%symmetry_backend = symmetry_backend
+      IF (PRESENT(symmetry_reduction_method)) &
+         kpoint%symmetry_reduction_method = symmetry_reduction_method
       IF (PRESENT(use_real_wfn)) kpoint%use_real_wfn = use_real_wfn
       IF (PRESENT(eps_geo)) kpoint%eps_geo = eps_geo
       IF (PRESENT(parallel_group_size)) kpoint%parallel_group_size = parallel_group_size
@@ -506,22 +721,35 @@ CONTAINS
 !> \param kpoint  The kpoint environment
 !> \param kpoint_section The input section
 !> \param a_vec ...
+!> \param cell ...
 !> \author JGH
 ! **************************************************************************************************
-   SUBROUTINE read_kpoint_section(kpoint, kpoint_section, a_vec)
+   SUBROUTINE read_kpoint_section(kpoint, kpoint_section, a_vec, cell)
       TYPE(kpoint_type), INTENT(INOUT)                   :: kpoint
       TYPE(section_vals_type), POINTER                   :: kpoint_section
       REAL(KIND=dp), DIMENSION(3, 3), INTENT(IN)         :: a_vec
+      TYPE(cell_type), OPTIONAL, POINTER                 :: cell
+
+      REAL(KIND=dp), PARAMETER                           :: eps_cell = 1.0E-14_dp
 
       CHARACTER(LEN=default_string_length)               :: ustr
       CHARACTER(LEN=default_string_length), &
          DIMENSION(:), POINTER                           :: tmpstringlist
       INTEGER                                            :: i, n_rep, nval, wfntype
-      LOGICAL                                            :: available
+      LOGICAL                                            :: available, backend_explicit, &
+                                                            non_lower_triangular_cell, &
+                                                            non_orthogonal_cell, reduction_explicit
       REAL(KIND=dp)                                      :: ff
+      REAL(KIND=dp), DIMENSION(3, 3)                     :: cart_a_vec
       REAL(KIND=dp), DIMENSION(:), POINTER               :: reallist
 
       CALL section_vals_get(kpoint_section, explicit=available)
+      cart_a_vec(:, :) = a_vec(:, :)
+      IF (PRESENT(cell)) THEN
+         IF (ASSOCIATED(cell)) THEN
+            IF (cell%input_cell_canonicalized) cart_a_vec(:, :) = cell%input_hmat(:, :)
+         END IF
+      END IF
 
       IF (available) THEN
          CALL section_vals_val_get(kpoint_section, "SCHEME", c_vals=tmpstringlist)
@@ -554,6 +782,14 @@ CONTAINS
             CALL uppercase(ustr)
             CALL section_vals_val_get(kpoint_section, "KPOINT", n_rep_val=n_rep)
             kpoint%nkp = n_rep
+            IF (ASSOCIATED(kpoint%xkp_input)) THEN
+               DEALLOCATE (kpoint%xkp_input)
+               NULLIFY (kpoint%xkp_input)
+            END IF
+            IF (ASSOCIATED(kpoint%wkp_input)) THEN
+               DEALLOCATE (kpoint%wkp_input)
+               NULLIFY (kpoint%wkp_input)
+            END IF
             ALLOCATE (kpoint%xkp(3, n_rep), kpoint%wkp(n_rep))
             DO i = 1, n_rep
                CALL section_vals_val_get(kpoint_section, "KPOINT", i_rep_val=i, &
@@ -564,13 +800,13 @@ CONTAINS
                CASE ("B_VECTOR")
                   kpoint%xkp(1:3, i) = reallist(1:3)
                CASE ("CART_ANGSTROM")
-                  kpoint%xkp(1:3, i) = (reallist(1)*a_vec(1, 1:3) + &
-                                        reallist(2)*a_vec(2, 1:3) + &
-                                        reallist(3)*a_vec(3, 1:3))/twopi*angstrom
+                  kpoint%xkp(1:3, i) = (reallist(1)*cart_a_vec(1, 1:3) + &
+                                        reallist(2)*cart_a_vec(2, 1:3) + &
+                                        reallist(3)*cart_a_vec(3, 1:3))/twopi*angstrom
                CASE ("CART_BOHR")
-                  kpoint%xkp(1:3, i) = (reallist(1)*a_vec(1, 1:3) + &
-                                        reallist(2)*a_vec(2, 1:3) + &
-                                        reallist(3)*a_vec(3, 1:3))/twopi
+                  kpoint%xkp(1:3, i) = (reallist(1)*cart_a_vec(1, 1:3) + &
+                                        reallist(2)*cart_a_vec(2, 1:3) + &
+                                        reallist(3)*cart_a_vec(3, 1:3))/twopi
                CASE DEFAULT
                   CPABORT("Unknown Unit for kpoint definition")
                END SELECT
@@ -578,15 +814,58 @@ CONTAINS
             END DO
             ff = 1.0_dp/SUM(kpoint%wkp(:))
             kpoint%wkp(:) = ff*kpoint%wkp(:)
+            ALLOCATE (kpoint%xkp_input(3, n_rep), kpoint%wkp_input(n_rep))
+            kpoint%xkp_input(1:3, 1:n_rep) = kpoint%xkp(1:3, 1:n_rep)
+            kpoint%wkp_input(1:n_rep) = kpoint%wkp(1:n_rep)
          CASE DEFAULT
             CPABORT("")
          END SELECT
+
+         CALL section_vals_val_get(kpoint_section, "GAMMA_CENTERED", l_val=kpoint%gamma_centered)
+         IF (kpoint%gamma_centered .AND. kpoint%kp_scheme /= "MONKHORST-PACK" .AND. &
+             kpoint%kp_scheme /= "MACDONALD") THEN
+            CALL cp_abort(__LOCATION__, &
+                          "KPOINTS%GAMMA_CENTERED is only supported with SCHEME MONKHORST-PACK or MACDONALD")
+         END IF
 
          CALL section_vals_val_get(kpoint_section, "SYMMETRY", l_val=kpoint%symmetry)
          CALL section_vals_val_get(kpoint_section, "WAVEFUNCTIONS", i_val=wfntype)
          CALL section_vals_val_get(kpoint_section, "VERBOSE", l_val=kpoint%verbose)
          CALL section_vals_val_get(kpoint_section, "FULL_GRID", l_val=kpoint%full_grid)
-         CALL section_vals_val_get(kpoint_section, "EPS_GEO", r_val=kpoint%eps_geo)
+         CALL section_vals_val_get(kpoint_section, "INVERSION_SYMMETRY_ONLY", &
+                                   l_val=kpoint%inversion_symmetry_only)
+         CALL section_vals_val_get(kpoint_section, "SYMMETRY_BACKEND", &
+                                   i_val=kpoint%symmetry_backend, explicit=backend_explicit)
+         CALL section_vals_val_get(kpoint_section, "SYMMETRY_REDUCTION_METHOD", &
+                                   i_val=kpoint%symmetry_reduction_method, explicit=reduction_explicit)
+         CALL resolve_kpoint_symmetry_settings(kpoint, backend_explicit, reduction_explicit)
+         CALL section_vals_val_get(kpoint_section, "EPS_SYMMETRY", r_val=kpoint%eps_geo)
+         IF ((kpoint%kp_scheme == "MONKHORST-PACK" .OR. kpoint%kp_scheme == "MACDONALD") .AND. &
+             kpoint%symmetry .AND. .NOT. kpoint%full_grid .AND. &
+             .NOT. kpoint%inversion_symmetry_only) THEN
+            non_lower_triangular_cell = (ABS(a_vec(2, 1)) > eps_cell) .OR. &
+                                        (ABS(a_vec(3, 1)) > eps_cell) .OR. &
+                                        (ABS(a_vec(3, 2)) > eps_cell)
+            non_orthogonal_cell = (ABS(DOT_PRODUCT(a_vec(:, 1), a_vec(:, 2))) > eps_cell) .OR. &
+                                  (ABS(DOT_PRODUCT(a_vec(:, 1), a_vec(:, 3))) > eps_cell) .OR. &
+                                  (ABS(DOT_PRODUCT(a_vec(:, 2), a_vec(:, 3))) > eps_cell)
+            ! The full point-group density-matrix transform is not charge-conserving for skew cells.
+            IF (non_orthogonal_cell) THEN
+               kpoint%inversion_symmetry_only = .TRUE.
+               CALL cp_warn(__LOCATION__, &
+                            "Full atomic k-point symmetry was requested for a non-orthogonal cell. "// &
+                            "Falling back to KPOINTS%INVERSION_SYMMETRY_ONLY because the full "// &
+                            "point-group density-matrix symmetrization is only charge-conserving for "// &
+                            "orthogonal cell matrices.")
+            ELSEIF (non_lower_triangular_cell) THEN
+               kpoint%inversion_symmetry_only = .TRUE.
+               CALL cp_warn(__LOCATION__, &
+                            "Full atomic k-point symmetry was requested for a cell matrix that does "// &
+                            "not follow the CP2K lower-triangular convention. Falling back to "// &
+                            "KPOINTS%INVERSION_SYMMETRY_ONLY. Use ABC/ALPHA_BETA_GAMMA or canonical "// &
+                            "A/B/C vectors to enable full point-group k-point reduction.")
+            END IF
+         END IF
          CALL section_vals_val_get(kpoint_section, "PARALLEL_GROUP_SIZE", &
                                    i_val=kpoint%parallel_group_size)
          SELECT CASE (wfntype)
@@ -605,14 +884,45 @@ CONTAINS
    END SUBROUTINE read_kpoint_section
 
 ! **************************************************************************************************
+!> \brief Resolve legacy and backend k-point symmetry settings
+!> \param kpoint ...
+!> \param backend_explicit whether SYMMETRY_BACKEND was given
+!> \param reduction_explicit whether SYMMETRY_REDUCTION_METHOD was given
+! **************************************************************************************************
+   SUBROUTINE resolve_kpoint_symmetry_settings(kpoint, backend_explicit, reduction_explicit)
+      TYPE(kpoint_type), INTENT(INOUT)                   :: kpoint
+      LOGICAL, INTENT(IN)                                :: backend_explicit, reduction_explicit
+
+      IF (backend_explicit .AND. .NOT. reduction_explicit) THEN
+         SELECT CASE (kpoint%symmetry_backend)
+         CASE (use_k290_kpoint_backend)
+            kpoint%symmetry_reduction_method = use_k290_kpoint_symmetry
+         CASE (use_spglib_kpoint_backend)
+            kpoint%symmetry_reduction_method = use_spglib_kpoint_symmetry
+         CASE DEFAULT
+            CPABORT("Unknown k-point symmetry backend")
+         END SELECT
+      END IF
+
+      IF (kpoint%symmetry_backend == use_spglib_kpoint_backend .AND. &
+          kpoint%symmetry_reduction_method /= use_spglib_kpoint_symmetry) THEN
+         CALL cp_abort(__LOCATION__, &
+                       "SYMMETRY_BACKEND SPGLIB requires SYMMETRY_REDUCTION_METHOD SPGLIB")
+      END IF
+
+   END SUBROUTINE resolve_kpoint_symmetry_settings
+
+! **************************************************************************************************
 !> \brief Write information on the kpoints to output
 !> \param kpoint  The kpoint environment
-!> \param dft_section  DFT section information
+!> \param iounit  output unit
+!> \param dft_section  DFT section information for output unit
 !> \author JGH
 ! **************************************************************************************************
-   SUBROUTINE write_kpoint_info(kpoint, dft_section)
+   SUBROUTINE write_kpoint_info(kpoint, iounit, dft_section)
       TYPE(kpoint_type), INTENT(IN)                      :: kpoint
-      TYPE(section_vals_type), INTENT(IN)                :: dft_section
+      INTEGER, INTENT(IN), OPTIONAL                      :: iounit
+      TYPE(section_vals_type), INTENT(IN), OPTIONAL      :: dft_section
 
       INTEGER                                            :: i, punit
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -620,7 +930,14 @@ CONTAINS
       NULLIFY (logger)
       logger => cp_get_default_logger()
 
-      punit = cp_print_key_unit_nr(logger, dft_section, "PRINT%KPOINTS", extension=".Log")
+      IF (PRESENT(dft_section)) THEN
+         punit = cp_print_key_unit_nr(logger, dft_section, "PRINT%KPOINTS", extension=".Log")
+      ELSE IF (PRESENT(iounit)) THEN
+         punit = iounit
+      ELSE
+         punit = cp_logger_get_default_unit_nr(logger)
+      END IF
+
       IF (punit > 0) THEN
 
          IF (kpoint%kp_scheme /= "NONE") THEN
@@ -634,12 +951,20 @@ CONTAINS
          CASE ("MONKHORST-PACK")
             WRITE (punit, '(A,T61,A20)') ' BRILLOUIN| K-point scheme ', '      Monkhorst-Pack'
             WRITE (punit, '(A,T66,3I5)') ' BRILLOUIN| K-Point grid', kpoint%nkp_grid
-            WRITE (punit, '(A,T66,G15.6)') ' BRILLOUIN| Accuracy in Symmetry determination', kpoint%eps_geo
+            IF (kpoint%gamma_centered) THEN
+               WRITE (punit, '(A,T76,A)') ' BRILLOUIN| Gamma-centered k-point mesh', ' ON'
+            END IF
+            WRITE (punit, '(A,T66,G15.6)') &
+               ' BRILLOUIN| K-point symmetry accuracy', kpoint%eps_geo
          CASE ("MACDONALD")
             WRITE (punit, '(A,T71,A10)') ' BRILLOUIN| K-point scheme ', ' MacDonald'
             WRITE (punit, '(A,T66,3I5)') ' BRILLOUIN| K-Point grid', kpoint%nkp_grid
             WRITE (punit, '(A,T51,3F10.4)') ' BRILLOUIN| K-Point shift', kpoint%kp_shift
-            WRITE (punit, '(A,T66,G15.6)') ' BRILLOUIN| Accuracy in Symmetry determination', kpoint%eps_geo
+            IF (kpoint%gamma_centered) THEN
+               WRITE (punit, '(A,T76,A)') ' BRILLOUIN| Gamma-centered k-point mesh', ' ON'
+            END IF
+            WRITE (punit, '(A,T66,G15.6)') &
+               ' BRILLOUIN| K-point symmetry accuracy', kpoint%eps_geo
          CASE ("GENERAL")
             WRITE (punit, '(A,T71,A10)') ' BRILLOUIN| K-point scheme ', '   General'
          CASE DEFAULT
@@ -650,6 +975,30 @@ CONTAINS
                WRITE (punit, '(A,T76,A)') ' BRILLOUIN| K-Point point group symmetrization', '   ON'
             ELSE
                WRITE (punit, '(A,T76,A)') ' BRILLOUIN| K-Point point group symmetrization', '  OFF'
+            END IF
+            IF (kpoint%inversion_symmetry_only) THEN
+               WRITE (punit, '(A,T76,A)') ' BRILLOUIN| Restrict symmetry to inversion', '   ON'
+            END IF
+            IF (kpoint%symmetry .AND. .NOT. kpoint%full_grid .AND. &
+                .NOT. kpoint%inversion_symmetry_only .AND. &
+                (kpoint%kp_scheme == "MONKHORST-PACK" .OR. kpoint%kp_scheme == "MACDONALD" .OR. &
+                 kpoint%kp_scheme == "GENERAL")) THEN
+               SELECT CASE (kpoint%symmetry_backend)
+               CASE (use_k290_kpoint_backend)
+                  WRITE (punit, '(A,T73,A)') ' BRILLOUIN| Symmetry backend', '   K290'
+               CASE (use_spglib_kpoint_backend)
+                  WRITE (punit, '(A,T73,A)') ' BRILLOUIN| Symmetry backend', ' SPGLIB'
+               CASE DEFAULT
+                  CPABORT("Unknown k-point symmetry backend")
+               END SELECT
+               SELECT CASE (kpoint%symmetry_reduction_method)
+               CASE (use_k290_kpoint_symmetry)
+                  WRITE (punit, '(A,T73,A)') ' BRILLOUIN| Symmetry reduction method', '   K290'
+               CASE (use_spglib_kpoint_symmetry)
+                  WRITE (punit, '(A,T73,A)') ' BRILLOUIN| Symmetry reduction method', ' SPGLIB'
+               CASE DEFAULT
+                  CPABORT("Unknown k-point symmetry reduction method")
+               END SELECT
             END IF
             IF (kpoint%use_real_wfn) THEN
                WRITE (punit, '(A,T76,A)') ' BRILLOUIN| Wavefunction type', ' REAL'
@@ -672,7 +1021,10 @@ CONTAINS
          END IF
 
       END IF
-      CALL cp_print_key_finished_output(punit, logger, dft_section, "PRINT%KPOINTS")
+
+      IF (PRESENT(dft_section)) THEN
+         CALL cp_print_key_finished_output(punit, logger, dft_section, "PRINT%KPOINTS")
+      END IF
 
    END SUBROUTINE write_kpoint_info
 
@@ -727,6 +1079,9 @@ CONTAINS
          CALL cp_fm_release(kp_env%smat)
          CALL cp_fm_release(kp_env%amat)
 
+         CALL cp_fm_release(kp_env%shalf)
+         CALL cp_cfm_release(kp_env%cshalf)
+
          DEALLOCATE (kp_env)
 
       END IF
@@ -773,11 +1128,15 @@ CONTAINS
       ALLOCATE (kp_sym)
 
       kp_sym%nwght = 0
+      kp_sym%nwred = 0
       kp_sym%apply_symmetry = .FALSE.
 
       NULLIFY (kp_sym%rot)
       NULLIFY (kp_sym%xkp)
+      NULLIFY (kp_sym%rotp)
       NULLIFY (kp_sym%f0)
+      NULLIFY (kp_sym%fcell)
+      NULLIFY (kp_sym%kgphase)
 
    END SUBROUTINE kpoint_sym_create
 
@@ -799,6 +1158,15 @@ CONTAINS
          END IF
          IF (ASSOCIATED(kp_sym%f0)) THEN
             DEALLOCATE (kp_sym%f0)
+         END IF
+         IF (ASSOCIATED(kp_sym%fcell)) THEN
+            DEALLOCATE (kp_sym%fcell)
+         END IF
+         IF (ASSOCIATED(kp_sym%kgphase)) THEN
+            DEALLOCATE (kp_sym%kgphase)
+         END IF
+         IF (ASSOCIATED(kp_sym%rotp)) THEN
+            DEALLOCATE (kp_sym%rotp)
          END IF
 
          DEALLOCATE (kp_sym)

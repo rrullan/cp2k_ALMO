@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -47,9 +47,9 @@ MODULE qs_neighbor_lists
                                               gth_potential_type,&
                                               sgp_potential_type
    USE input_constants,                 ONLY: &
-        dispersion_uff, do_method_lrigpw, do_method_rigpw, do_potential_id, do_potential_short, &
-        do_potential_truncated, do_se_IS_slater, vdw_pairpot_dftd3, vdw_pairpot_dftd3bj, &
-        xc_vdw_fun_pairpot
+        dispersion_uff, do_method_lrigpw, do_method_rigpw, do_potential_id, &
+        do_potential_mix_cl_trunc, do_potential_short, do_potential_truncated, do_se_IS_slater, &
+        vdw_pairpot_dftd4, xc_vdw_fun_pairpot
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -67,6 +67,7 @@ MODULE qs_neighbor_lists
                                               paw_proj_set_type
    USE periodic_table,                  ONLY: ptable
    USE physcon,                         ONLY: bohr
+   USE qs_cneo_types,                   ONLY: cneo_potential_type
    USE qs_dftb_types,                   ONLY: qs_dftb_atom_type
    USE qs_dftb_utils,                   ONLY: get_dftb_atom_param
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
@@ -102,12 +103,12 @@ MODULE qs_neighbor_lists
 
 ! **************************************************************************************************
    TYPE local_atoms_type
-      INTEGER, DIMENSION(:), POINTER                   :: list, &
-                                                          list_local_a_index, &
-                                                          list_local_b_index, &
-                                                          list_1d, &
-                                                          list_a_mol, &
-                                                          list_b_mol
+      INTEGER, DIMENSION(:), POINTER                   :: list => NULL(), &
+                                                          list_local_a_index => NULL(), &
+                                                          list_local_b_index => NULL(), &
+                                                          list_1d => NULL(), &
+                                                          list_a_mol => NULL(), &
+                                                          list_b_mol => NULL()
    END TYPE local_atoms_type
 ! **************************************************************************************************
 
@@ -295,20 +296,22 @@ CONTAINS
       CHARACTER(LEN=default_string_length)               :: print_key_path
       INTEGER                                            :: handle, hfx_pot, ikind, ingp, iw, jkind, &
                                                             maxatom, ngp, nkind, zat
-      LOGICAL :: all_potential_present, almo, dftb, do_hfx, dokp, gth_potential_present, &
-         lri_optbas, lrigpw, mic, molecule_only, nddo, paw_atom, paw_atom_present, rigpw, &
-         sgp_potential_present, xtb
+      LOGICAL :: all_potential_present, almo, cneo_potential_present, dftb, do_hfx, dokp, &
+         gth_potential_present, lri_optbas, lrigpw, mic, molecule_only, nddo, paw_atom, &
+         paw_atom_present, rigpw, sgp_potential_present, xtb
       LOGICAL, ALLOCATABLE, DIMENSION(:) :: all_present, aux_fit_present, aux_present, &
-         core_present, default_present, nonbond1_atom, nonbond2_atom, oce_present, orb_present, &
-         ppl_present, ppnl_present, ri_present, xb1_atom, xb2_atom
+         cneo_present, core_present, default_present, nonbond1_atom, nonbond2_atom, oce_present, &
+         orb_present, ppl_present, ppnl_present, ri_present, xb1_atom, xb2_atom
       REAL(dp)                                           :: almo_rcov, almo_rvdw, eps_schwarz, &
                                                             omega, pdist, rcut, roperator, subcells
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: all_pot_rad, aux_fit_radius, c_radius, calpha, &
-         core_radius, oce_radius, orb_radius, ppl_radius, ppnl_radius, ri_radius, zeff
+         core_radius, nuc_orb_radius, oce_radius, orb_radius, ppl_radius, ppnl_radius, ri_radius, &
+         zeff
       REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: pair_radius, pair_radius_lb
       TYPE(all_potential_type), POINTER                  :: all_potential
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cell_type), POINTER                           :: cell
+      TYPE(cneo_potential_type), POINTER                 :: cneo_potential
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(distribution_1d_type), POINTER                :: distribution_1d
@@ -316,14 +319,15 @@ CONTAINS
       TYPE(ewald_environment_type), POINTER              :: ewald_env
       TYPE(gth_potential_type), POINTER                  :: gth_potential
       TYPE(gto_basis_set_type), POINTER                  :: aux_basis_set, aux_fit_basis_set, &
-                                                            orb_basis_set, ri_basis_set
+                                                            nuc_basis_set, orb_basis_set, &
+                                                            ri_basis_set
       TYPE(kpoint_type), POINTER                         :: kpoints
       TYPE(local_atoms_type), ALLOCATABLE, DIMENSION(:)  :: atom2d
       TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
       TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: saa_list, sab_all, sab_almo, &
-         sab_cn, sab_core, sab_gcp, sab_kp, sab_kp_nosym, sab_lrc, sab_orb, sab_scp, sab_se, &
-         sab_tbe, sab_vdw, sab_xb, sab_xtb_nonbond, sab_xtbe, sac_ae, sac_lri, sac_ppl, sap_oce, &
-         sap_ppnl, soa_list, soo_list
+         sab_cn, sab_cneo, sab_core, sab_gcp, sab_kp, sab_kp_nosym, sab_lrc, sab_orb, sab_scp, &
+         sab_se, sab_tbe, sab_vdw, sab_xb, sab_xtb_nonbond, sab_xtb_pp, sab_xtbe, sac_ae, sac_lri, &
+         sac_ppl, sap_oce, sap_ppnl, soa_list, soo_list
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(paw_proj_set_type), POINTER                   :: paw_proj
       TYPE(qs_dftb_atom_type), POINTER                   :: dftb_atom
@@ -355,6 +359,7 @@ CONTAINS
       NULLIFY (sab_xtbe)
       NULLIFY (sab_core)
       NULLIFY (sab_xb)
+      NULLIFY (sab_xtb_pp)
       NULLIFY (sab_xtb_nonbond)
       NULLIFY (sab_all)
       NULLIFY (sab_vdw)
@@ -364,6 +369,7 @@ CONTAINS
       NULLIFY (sab_almo)
       NULLIFY (sab_kp)
       NULLIFY (sab_kp_nosym)
+      NULLIFY (sab_cneo)
 
       CALL get_qs_env(qs_env, &
                       ks_env=ks_env, &
@@ -398,12 +404,14 @@ CONTAINS
                       sab_xtbe=sab_xtbe, &
                       sab_core=sab_core, &
                       sab_xb=sab_xb, &
+                      sab_xtb_pp=sab_xtb_pp, &
                       sab_xtb_nonbond=sab_xtb_nonbond, &
                       sab_scp=sab_scp, &
                       sab_all=sab_all, &
                       sab_almo=sab_almo, &
                       sab_kp=sab_kp, &
-                      sab_kp_nosym=sab_kp_nosym)
+                      sab_kp_nosym=sab_kp_nosym, &
+                      sab_cneo=sab_cneo)
 
       dokp = (kpoints%nkp > 0)
       nddo = dft_control%qs_control%semi_empirical
@@ -435,7 +443,8 @@ CONTAINS
       CALL get_qs_kind_set(qs_kind_set, paw_atom_present=paw_atom_present, &
                            gth_potential_present=gth_potential_present, &
                            sgp_potential_present=sgp_potential_present, &
-                           all_potential_present=all_potential_present)
+                           all_potential_present=all_potential_present, &
+                           cneo_potential_present=cneo_potential_present)
 
       CALL section_vals_val_get(qs_env%input, "DFT%SUBCELLS", r_val=subcells)
 
@@ -467,6 +476,10 @@ CONTAINS
          ALLOCATE (all_present(nkind), all_pot_rad(nkind))
          all_pot_rad = 0.0_dp
       END IF
+      IF (cneo_potential_present) THEN
+         ALLOCATE (cneo_present(nkind), nuc_orb_radius(nkind))
+         nuc_orb_radius = 0.0_dp
+      END IF
 
       ! Initialize the local data structures
       ALLOCATE (atom2d(nkind))
@@ -480,13 +493,15 @@ CONTAINS
          CALL get_qs_kind(qs_kind_set(ikind), basis_set=orb_basis_set, basis_type="ORB")
          CALL get_qs_kind(qs_kind_set(ikind), basis_set=aux_basis_set, basis_type="AUX")
          CALL get_qs_kind(qs_kind_set(ikind), basis_set=aux_fit_basis_set, basis_type="AUX_FIT")
+         CALL get_qs_kind(qs_kind_set(ikind), basis_set=nuc_basis_set, basis_type="NUC")
 
          CALL get_qs_kind(qs_kind_set(ikind), &
                           paw_proj_set=paw_proj, &
                           paw_atom=paw_atom, &
                           all_potential=all_potential, &
                           gth_potential=gth_potential, &
-                          sgp_potential=sgp_potential)
+                          sgp_potential=sgp_potential, &
+                          cneo_potential=cneo_potential)
 
          IF (dftb) THEN
             ! Set the interaction radius for the neighbor lists (DFTB case)
@@ -517,15 +532,22 @@ CONTAINS
             aux_fit_present(ikind) = .FALSE.
          END IF
 
-         ! core overlap
-         CALL get_qs_kind(qs_kind_set(ikind), &
-                          alpha_core_charge=calpha(ikind), &
-                          core_charge_radius=core_radius(ikind), &
-                          zeff=zeff(ikind))
-         IF (zeff(ikind) /= 0._dp .AND. calpha(ikind) /= 0._dp) THEN
-            core_present(ikind) = .TRUE.
+         core_present(ikind) = .FALSE.
+         IF (ASSOCIATED(cneo_potential) .AND. ASSOCIATED(nuc_basis_set)) THEN
+            cneo_present(ikind) = .TRUE.
+            CALL get_gto_basis_set(gto_basis_set=nuc_basis_set, kind_radius=nuc_orb_radius(ikind))
          ELSE
-            core_present(ikind) = .FALSE.
+            IF (cneo_potential_present) cneo_present(ikind) = .FALSE.
+            ! core overlap
+            CALL get_qs_kind(qs_kind_set(ikind), &
+                             alpha_core_charge=calpha(ikind), &
+                             core_charge_radius=core_radius(ikind), &
+                             zeff=zeff(ikind))
+            IF (zeff(ikind) /= 0._dp .AND. calpha(ikind) /= 0._dp) THEN
+               core_present(ikind) = .TRUE.
+            ELSE
+               core_present(ikind) = .FALSE.
+            END IF
          END IF
 
          ! Pseudopotentials
@@ -622,6 +644,8 @@ CONTAINS
                roperator = 0.0_dp
             CASE (do_potential_truncated)
                CALL section_vals_val_get(hfx_sections, "INTERACTION_POTENTIAL%CUTOFF_RADIUS", r_val=roperator)
+            CASE (do_potential_mix_cl_trunc)
+               CALL section_vals_val_get(hfx_sections, "INTERACTION_POTENTIAL%CUTOFF_RADIUS", r_val=roperator)
             CASE (do_potential_short)
                CALL section_vals_val_get(hfx_sections, "INTERACTION_POTENTIAL%OMEGA", r_val=omega)
                CALL section_vals_val_get(hfx_sections, "SCREENING%EPS_SCHWARZ", r_val=eps_schwarz)
@@ -639,7 +663,7 @@ CONTAINS
                CALL pair_radius_setup(orb_present, orb_present, orb_radius, orb_radius, pair_radius_lb)
                DO jkind = 1, nkind
                   DO ikind = 1, nkind
-                     IF (pair_radius(ikind, jkind) + cutoff_screen_factor*roperator .LE. pair_radius_lb(ikind, jkind)) &
+                     IF (pair_radius(ikind, jkind) + cutoff_screen_factor*roperator <= pair_radius_lb(ikind, jkind)) &
                         pair_radius(ikind, jkind) = pair_radius_lb(ikind, jkind) - roperator
                   END DO
                END DO
@@ -713,6 +737,16 @@ CONTAINS
          END IF
       END IF
 
+      ! Build quantum nuclear orbital-classical nuclear ERFC potential list for CNEO
+      IF (cneo_potential_present) THEN
+         CALL pair_radius_setup(cneo_present, core_present, nuc_orb_radius, core_radius, pair_radius)
+         CALL build_neighbor_lists(sab_cneo, particle_set, atom2d, cell, pair_radius, &
+                                   subcells=subcells, symmetric=.FALSE., operator_type="PP", nlname="sab_cneo")
+         CALL set_ks_env(ks_env=ks_env, sab_cneo=sab_cneo)
+         CALL write_neighbor_lists(sab_cneo, particle_set, cell, para_env, neighbor_list_section, &
+                                   "/SAB_CNEO", "sab_cneo", "NUCLEAR ORBITAL ERFC POTENTIAL")
+      END IF
+
       IF (nddo) THEN
          ! Semi-empirical neighbor lists
          default_present = .TRUE.
@@ -772,7 +806,7 @@ CONTAINS
          END IF
       END IF
 
-      IF (xtb) THEN
+      IF (xtb .AND. (.NOT. dft_control%qs_control%xtb_control%do_tblite)) THEN
          ! Build the neighbor lists for the xTB Ewald method
          IF (dft_control%qs_control%xtb_control%do_ewald) THEN
             CALL get_qs_env(qs_env=qs_env, ewald_env=ewald_env)
@@ -783,6 +817,12 @@ CONTAINS
                                       subcells=subcells, nlname="sab_tbe")
             CALL set_ks_env(ks_env=ks_env, sab_tbe=sab_tbe)
          END IF
+         ! Repulsive Potential
+         pair_radius(1:nkind, 1:nkind) = dft_control%qs_control%xtb_control%rcpair(1:nkind, 1:nkind)
+         default_present = .TRUE.
+         CALL build_neighbor_lists(sab_xtb_pp, particle_set, atom2d, cell, pair_radius, &
+                                   subcells=subcells, nlname="sab_xtb_pp")
+         CALL set_ks_env(ks_env=ks_env, sab_xtb_pp=sab_xtb_pp)
          ! SR part of Coulomb interaction
          DO ikind = 1, nkind
             CALL get_qs_kind(qs_kind_set(ikind), xtb_parameter=xtb_atom)
@@ -817,7 +857,8 @@ CONTAINS
                                    "/SAB_XB", "sab_xb", "XB bonding")
 
          ! nonbonded interactions list
-         IF (dft_control%qs_control%xtb_control%do_nonbonded) THEN
+         IF (dft_control%qs_control%xtb_control%do_nonbonded &
+             .AND. (.NOT. dft_control%qs_control%xtb_control%do_tblite)) THEN
             ngp = SIZE(dft_control%qs_control%xtb_control%nonbonded%pot)
             ALLOCATE (nonbond1_atom(nkind), nonbond2_atom(nkind))
             nonbond1_atom = .FALSE.
@@ -850,20 +891,23 @@ CONTAINS
       END IF
 
       ! Build the neighbor lists for the vdW pair potential
-      CALL get_qs_env(qs_env=qs_env, dispersion_env=dispersion_env)
-      sab_vdw => dispersion_env%sab_vdw
-      sab_cn => dispersion_env%sab_cn
-      IF (dispersion_env%type == xc_vdw_fun_pairpot .OR. xtb) THEN
-         c_radius(:) = dispersion_env%rc_disp
-         default_present = .TRUE. !include all atoms in vdW (even without basis)
-         CALL pair_radius_setup(default_present, default_present, c_radius, c_radius, pair_radius)
-         CALL build_neighbor_lists(sab_vdw, particle_set, atom2d, cell, pair_radius, &
-                                   subcells=subcells, operator_type="PP", nlname="sab_vdw")
-         dispersion_env%sab_vdw => sab_vdw
+      IF (.NOT. dft_control%qs_control%xtb_control%do_tblite) THEN
+         CALL get_qs_env(qs_env=qs_env, dispersion_env=dispersion_env)
+         sab_vdw => dispersion_env%sab_vdw
+         sab_cn => dispersion_env%sab_cn
+         IF (dispersion_env%type == xc_vdw_fun_pairpot .OR. xtb) THEN
+            IF (dispersion_env%pp_type == vdw_pairpot_dftd4) THEN
+               c_radius(:) = dispersion_env%rc_d4
+            ELSE
+               c_radius(:) = dispersion_env%rc_disp
+            END IF
+            default_present = .TRUE. !include all atoms in vdW (even without basis)
+            CALL pair_radius_setup(default_present, default_present, c_radius, c_radius, pair_radius)
+            CALL build_neighbor_lists(sab_vdw, particle_set, atom2d, cell, pair_radius, &
+                                      subcells=subcells, operator_type="PP", nlname="sab_vdw")
+            dispersion_env%sab_vdw => sab_vdw
 
-         IF (xtb .OR. dispersion_env%pp_type == vdw_pairpot_dftd3 .OR. &
-             dispersion_env%pp_type == vdw_pairpot_dftd3bj) THEN
-            ! Build the neighbor lists for coordination numbers as needed by the DFT-D3 method
+            ! Build the neighbor lists for coordination numbers as needed by the DFT-D3/D4 method
             ! This is also needed for the xTB Hamiltonian
             DO ikind = 1, nkind
                CALL get_atomic_kind(atomic_kind_set(ikind), z=zat)
@@ -985,6 +1029,9 @@ CONTAINS
       END IF
       IF (all_potential_present .OR. sgp_potential_present) THEN
          DEALLOCATE (all_present, all_pot_rad)
+      END IF
+      IF (cneo_potential_present) THEN
+         DEALLOCATE (cneo_present, nuc_orb_radius)
       END IF
 
       CALL timestop(handle)
@@ -1265,7 +1312,7 @@ CONTAINS
                IF (my_molecular) THEN
                   mol_b = atom(jkind)%list_b_mol(jatom_local)
                   IF (PRESENT(subset_of_mol)) THEN
-                     IF (subset_of_mol(mol_b) .NE. current_subset) CYCLE
+                     IF (subset_of_mol(mol_b) /= current_subset) CYCLE
                   END IF
                END IF
                r = r_pbc(:, atom_b)
@@ -1324,7 +1371,7 @@ CONTAINS
                                     IF (sb_min(1) >= subcell(i, j, k)%s_max(1)) CYCLE loop_i
                                  END IF
 
-                                 IF (subcell(i, j, k)%natom == 0) CYCLE
+                                 IF (subcell(i, j, k)%natom == 0) CYCLE loop_i
 
                                  DO iatom_subcell = 1, subcell(i, j, k)%natom
                                     iatom_local = subcell(i, j, k)%atom_list(iatom_subcell)
@@ -1591,8 +1638,8 @@ CONTAINS
       ALLOCATE (list(na + nb))
 
       n = na
-      IF (na .GT. 0) list(1:na) = lista(1:na)
-      IF (nb .GT. 0) THEN
+      IF (na > 0) list(1:na) = lista(1:na)
+      IF (nb > 0) THEN
          loopb: DO ib = 1, nb
             DO i = 1, na
                IF (listb(ib) == list(i)) CYCLE loopb
@@ -1710,10 +1757,10 @@ CONTAINS
             nblock_max = nblock(mype)
             nelement_sum = nelement(mype)
             nelement_max = nelement(mype)
-            tmp = (/nblock_sum, nelement_sum/)
+            tmp = [nblock_sum, nelement_sum]
             CALL para_env%sum(tmp)
             nblock_sum = tmp(1); nelement_sum = tmp(2)
-            tmp = (/nblock_max, nelement_max/)
+            tmp = [nblock_max, nelement_max]
             CALL para_env%max(tmp)
             nblock_max = tmp(1); nelement_max = tmp(2)
          END IF

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -30,6 +30,11 @@ MODULE transport
    USE bibliography,                    ONLY: Bruck2014,&
                                               cite_reference
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_convert_csr_to_dbcsr, dbcsr_convert_dbcsr_to_csr, dbcsr_copy, dbcsr_create, &
+        dbcsr_csr_create, dbcsr_csr_create_from_dbcsr, dbcsr_csr_dbcsr_blkrow_dist, &
+        dbcsr_csr_print_sparsity, dbcsr_csr_type, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
+        dbcsr_has_symmetry, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_to_csr_screening
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_unit_nr,&
@@ -39,12 +44,6 @@ MODULE transport
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_convert_csr_to_dbcsr, dbcsr_convert_dbcsr_to_csr, dbcsr_copy, &
-        dbcsr_copy_into_existing, dbcsr_create, dbcsr_csr_create, dbcsr_csr_create_from_dbcsr, &
-        dbcsr_csr_dbcsr_blkrow_dist, dbcsr_csr_print_sparsity, dbcsr_csr_type, &
-        dbcsr_deallocate_matrix, dbcsr_desymmetrize, dbcsr_has_symmetry, dbcsr_set, dbcsr_type, &
-        dbcsr_type_no_symmetry, dbcsr_type_real_8
    USE input_section_types,             ONLY: section_get_ivals,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -257,7 +256,7 @@ CONTAINS
             CALL section_vals_val_get(contact_section, "INJECTION_SIGN", i_rep_section=i, i_val=contact_injsign)
             CALL section_vals_val_get(contact_section, "INJECTING_CONTACT", i_rep_section=i, l_val=injecting_contact)
 
-            IF (contact_natoms .LE. 0) CPABORT("Number of atoms in contact region needs to be defined.")
+            IF (contact_natoms <= 0) CPABORT("Number of atoms in contact region needs to be defined.")
 
             transport_env%contacts_data((i - 1)*stride_contacts + 1) = contact_bandwidth
             transport_env%contacts_data((i - 1)*stride_contacts + 2) = contact_start - 1 ! C indexing
@@ -323,13 +322,12 @@ CONTAINS
       CALL dbcsr_set(transport_env%dm_imag, 0.0_dp)
 
       CALL dbcsr_create(transport_env%csr_sparsity, "CSR sparsity", &
-                        template=transport_env%template_matrix_sym, &
-                        data_type=dbcsr_type_real_8)
+                        template=transport_env%template_matrix_sym)
       CALL dbcsr_copy(transport_env%csr_sparsity, transport_env%template_matrix_sym)
 
       CALL cp_dbcsr_to_csr_screening(ks_env, transport_env%csr_sparsity)
 
-      IF (.NOT. transport_env%csr_screening) CALL dbcsr_set(transport_env%csr_sparsity, 1.0)
+      IF (.NOT. transport_env%csr_screening) CALL dbcsr_set(transport_env%csr_sparsity, 1.0_dp)
       CALL dbcsr_csr_create_from_dbcsr(transport_env%template_matrix_nosym, &
                                        transport_env%s_matrix, &
                                        dbcsr_csr_dbcsr_blkrow_dist, &
@@ -405,16 +403,16 @@ CONTAINS
       CALL csr_interop_nullify(p_mat)
       CALL csr_interop_nullify(imagp_mat)
 
-      CALL dbcsr_copy_into_existing(transport_env%template_matrix_sym, matrix_s)
+      CALL dbcsr_copy(transport_env%template_matrix_sym, matrix_s, keep_sparsity=.TRUE.)
       CALL convert_dbcsr_to_csr_interop(transport_env%template_matrix_sym, transport_env%s_matrix, s_mat)
 
-      CALL dbcsr_copy_into_existing(transport_env%template_matrix_sym, matrix_ks)
+      CALL dbcsr_copy(transport_env%template_matrix_sym, matrix_ks, keep_sparsity=.TRUE.)
       CALL convert_dbcsr_to_csr_interop(transport_env%template_matrix_sym, transport_env%ks_matrix, ks_mat)
 
-      CALL dbcsr_copy_into_existing(transport_env%template_matrix_sym, matrix_p)
+      CALL dbcsr_copy(transport_env%template_matrix_sym, matrix_p, keep_sparsity=.TRUE.)
       CALL convert_dbcsr_to_csr_interop(transport_env%template_matrix_sym, transport_env%p_matrix, p_mat)
 
-      CALL dbcsr_copy_into_existing(transport_env%template_matrix_sym, matrix_s)
+      CALL dbcsr_copy(transport_env%template_matrix_sym, matrix_s, keep_sparsity=.TRUE.)
       CALL convert_dbcsr_to_csr_interop(transport_env%template_matrix_sym, transport_env%imagp_matrix, imagp_mat)
 
       CALL c_method(transport_env%params, s_mat, ks_mat, p_mat, imagp_mat)
@@ -463,25 +461,25 @@ CONTAINS
       nzerow_local => csr_mat%nzerow_local
       nzvals_local => csr_mat%nzval_local%r_dp ! support real double percision for now
 
-      IF (SIZE(rowptr_local) .EQ. 0) THEN
+      IF (SIZE(rowptr_local) == 0) THEN
          csr_interop_mat%rowptr_local = C_NULL_PTR
       ELSE
          csr_interop_mat%rowptr_local = C_LOC(rowptr_local(1))
       END IF
 
-      IF (SIZE(colind_local) .EQ. 0) THEN
+      IF (SIZE(colind_local) == 0) THEN
          csr_interop_mat%colind_local = C_NULL_PTR
       ELSE
          csr_interop_mat%colind_local = C_LOC(colind_local(1))
       END IF
 
-      IF (SIZE(nzerow_local) .EQ. 0) THEN
+      IF (SIZE(nzerow_local) == 0) THEN
          csr_interop_mat%nzerow_local = C_NULL_PTR
       ELSE
          csr_interop_mat%nzerow_local = C_LOC(nzerow_local(1))
       END IF
 
-      IF (SIZE(nzvals_local) .EQ. 0) THEN
+      IF (SIZE(nzvals_local) == 0) THEN
          csr_interop_mat%nzvals_local = C_NULL_PTR
       ELSE
          csr_interop_mat%nzvals_local = C_LOC(nzvals_local(1))
@@ -492,7 +490,7 @@ CONTAINS
          CALL mp_group%allgather(csr_mat%nrows_local, nrows_local_all)
          CALL cumsum_i(nrows_local_all, first_row_all)
 
-         IF (mepos .EQ. 0) THEN
+         IF (mepos == 0) THEN
             csr_interop_mat%first_row = 0
          ELSE
             csr_interop_mat%first_row = first_row_all(mepos - 1)
@@ -619,7 +617,7 @@ CONTAINS
          END DO
       END DO
 
-      IF (natom .EQ. 0) THEN
+      IF (natom == 0) THEN
          transport_env%params%nsgf = C_NULL_PTR
          transport_env%params%zeff = C_NULL_PTR
       ELSE

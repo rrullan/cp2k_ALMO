@@ -1,18 +1,17 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
+#include "offload_library.h"
+#include "offload_runtime.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "offload_library.h"
-#include "offload_runtime.h"
 
 #if defined(__OFFLOAD_CUDA)
 #include <cuda.h>
@@ -59,6 +58,8 @@ void offload_init(void) {
   }
 #elif defined(__OFFLOAD_HIP)
   OFFLOAD_CHECK(hipInit(0));
+#elif defined(__OFFLOAD_OPENCL)
+  OFFLOAD_CHECK(c_dbcsr_acc_init());
 #endif
 }
 
@@ -68,10 +69,12 @@ void offload_init(void) {
  ******************************************************************************/
 int offload_get_device_count(void) {
   int count = 0;
-#ifdef __OFFLOAD_CUDA
+#if defined(__OFFLOAD_CUDA)
   OFFLOAD_CHECK(cudaGetDeviceCount(&count));
 #elif defined(__OFFLOAD_HIP)
   OFFLOAD_CHECK(hipGetDeviceCount(&count));
+#elif defined(__OFFLOAD_OPENCL)
+  OFFLOAD_CHECK(c_dbcsr_acc_get_ndevices(&count));
 #endif
   return count;
 }
@@ -93,10 +96,12 @@ int offload_get_chosen_device(void) { return chosen_device_id; }
  * \author Ole Schuett
  ******************************************************************************/
 void offload_activate_chosen_device(void) {
-#ifdef __OFFLOAD_CUDA
+#if defined(__OFFLOAD_CUDA)
   OFFLOAD_CHECK(cudaSetDevice(chosen_device_id));
 #elif defined(__OFFLOAD_HIP)
   OFFLOAD_CHECK(hipSetDevice(chosen_device_id));
+#elif defined(__OFFLOAD_OPENCL)
+  OFFLOAD_CHECK(c_dbcsr_acc_set_active_device(chosen_device_id));
 #endif
 }
 
@@ -153,30 +158,31 @@ void offload_mem_info(size_t *free, size_t *total) {
   OFFLOAD_CHECK(cudaMemGetInfo(free, total));
 #elif defined(__OFFLOAD_HIP)
   OFFLOAD_CHECK(hipMemGetInfo(free, total));
+#elif defined(__OFFLOAD_OPENCL)
+  OFFLOAD_CHECK(c_dbcsr_acc_dev_mem_info(free, total));
 #else
-  *free = 0;
-  *total = 0;
+  *free = *total = 0;
 #endif
 }
 
 int offload_host_malloc(void **ptr__, const size_t size__) {
-#if defined(__OFFLOAD_CUDA) || defined(__OFFLOAD_HIP)
-  /* API checks are included in the overloading of the function */
-  offloadMallocHost(ptr__, size__);
+#if defined(__OFFLOAD)
+  offloadMallocHost(ptr__, size__); /* checked */
+  return offloadSuccess;
 #else
   *ptr__ = malloc(size__);
-  return 0;
+  return EXIT_SUCCESS;
 #endif
-  return 0;
 }
 
 int offload_host_free(void *ptr__) {
-#if defined(__OFFLOAD_CUDA) || defined(__OFFLOAD_HIP)
-  offloadFreeHost(ptr__);
+#if defined(__OFFLOAD)
+  offloadFreeHost(ptr__); /* checked */
+  return offloadSuccess;
 #else
   free(ptr__);
+  return EXIT_SUCCESS;
 #endif
-  return 0;
 }
 
 // EOF

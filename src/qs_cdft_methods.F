@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -297,7 +297,7 @@ CONTAINS
                IF (becke_control%cavity_confine) THEN
                   IF (becke_control%cavity%array(k, j, i) < eps_cavity) CYCLE
                END IF
-               ind = (/k, j, i/)
+               ind = [k, j, i]
                grid_p(1) = k*dr(1) + shift(1)
                grid_p(2) = j*dr(2) + shift(2)
                grid_p(3) = i*dr(3) + shift(3)
@@ -330,7 +330,7 @@ CONTAINS
                      CYCLE
                   END IF
                   IF (becke_control%vector_buffer%store_vectors) THEN
-                     IF (becke_control%vector_buffer%distances(iatom) .EQ. 0.0_dp) THEN
+                     IF (becke_control%vector_buffer%distances(iatom) == 0.0_dp) THEN
                         r = becke_control%vector_buffer%position_vecs(:, iatom)
                         dist_vec = (r - grid_p) - ANINT((r - grid_p)/cell_v)*cell_v
                         dist1 = SQRT(DOT_PRODUCT(dist_vec, dist_vec))
@@ -348,13 +348,13 @@ CONTAINS
                      dist_vec = (r - grid_p) - ANINT((r - grid_p)/cell_v)*cell_v
                      dist1 = SQRT(DOT_PRODUCT(dist_vec, dist_vec))
                   END IF
-                  IF (dist1 .LE. cutoffs(iatom)) THEN
+                  IF (dist1 <= cutoffs(iatom)) THEN
                      IF (in_memory) THEN
-                        IF (dist1 .LE. th) dist1 = th
+                        IF (dist1 <= th) dist1 = th
                         dr_i_dR(:) = dist_vec(:)/dist1
                      END IF
                      DO jatom = 1, natom
-                        IF (jatom .NE. iatom) THEN
+                        IF (jatom /= iatom) THEN
                            ! Using pairwise symmetry, execute block only for such j<i
                            ! that have previously not been looped over
                            ! Note that if skip_me(jatom) = .TRUE., this means that the outer
@@ -364,7 +364,7 @@ CONTAINS
                               IF (.NOT. skip_me(jatom)) CYCLE
                            END IF
                            IF (becke_control%vector_buffer%store_vectors) THEN
-                              IF (becke_control%vector_buffer%distances(jatom) .EQ. 0.0_dp) THEN
+                              IF (becke_control%vector_buffer%distances(jatom) == 0.0_dp) THEN
                                  r1 = becke_control%vector_buffer%position_vecs(:, jatom)
                                  dist_vec = (r1 - grid_p) - ANINT((r1 - grid_p)/cell_v)*cell_v
                                  dist2 = SQRT(DOT_PRODUCT(dist_vec, dist_vec))
@@ -388,7 +388,7 @@ CONTAINS
                               ELSE
                                  dr1_r2 = (r - r1) - ANINT((r - r1)/cell_v)*cell_v
                               END IF
-                              IF (dist2 .LE. th) dist2 = th
+                              IF (dist2 <= th) dist2 = th
                               tmp_const = (becke_control%vector_buffer%R12(iatom, jatom)**3)
                               dr_ij_dR(:) = dr1_r2(:)/tmp_const
                               !derivative w.r.t. Rj
@@ -427,18 +427,18 @@ CONTAINS
                            tmp_const = 0.5_dp*(1.0_dp - myexp)
                            cell_functions(iatom) = cell_functions(iatom)*tmp_const
                            IF (in_memory) THEN
-                              IF (ABS(tmp_const) .LE. th) tmp_const = tmp_const + th
+                              IF (ABS(tmp_const) <= th) tmp_const = tmp_const + th
                               ! P_i independent part of dP_i/dR_i
                               dP_i_dRi(:, iatom) = dP_i_dRi(:, iatom) + ds_dR_i(:)/tmp_const
                               ! P_i independent part of dP_i/dR_j
                               dP_i_dRj(:, iatom, jatom) = ds_dR_j(:)/tmp_const
                            END IF
 
-                           IF (dist2 .LE. cutoffs(jatom)) THEN
+                           IF (dist2 <= cutoffs(jatom)) THEN
                               tmp_const = 0.5_dp*(1.0_dp + myexp) ! s(myji)
                               cell_functions(jatom) = cell_functions(jatom)*tmp_const
                               IF (in_memory) THEN
-                                 IF (ABS(tmp_const) .LE. th) tmp_const = tmp_const + th
+                                 IF (ABS(tmp_const) <= th) tmp_const = tmp_const + th
                                  ! P_j independent part of dP_j/dR_i
                                  ! d s(myji)/d R_i = -d s(myij)/d R_i
                                  dP_i_dRj(:, jatom, iatom) = -ds_dR_i(:)/tmp_const
@@ -470,7 +470,7 @@ CONTAINS
                            END DO
                         END IF
                         DO jatom = 1, natom
-                           IF (jatom .NE. iatom) THEN
+                           IF (jatom /= iatom) THEN
                               ! Final value of dP_i_dRj
                               dP_i_dRj(:, iatom, jatom) = cell_functions(iatom)*dP_i_dRj(:, iatom, jatom)
                               ! Update where needed
@@ -523,7 +523,7 @@ CONTAINS
                   sum_cell_f_all = sum_cell_f_all + cell_functions(ip)
                END DO
                ! Gradients at (k,j,i)
-               IF (in_memory .AND. ABS(sum_cell_f_all) .GT. 0.0_dp) THEN
+               IF (in_memory .AND. ABS(sum_cell_f_all) > 0.0_dp) THEN
                   DO igroup = 1, SIZE(group)
                      DO iatom = 1, natom
                         group(igroup)%gradients(3*(iatom - 1) + 1:3*(iatom - 1) + 3, k, j, i) = &
@@ -533,7 +533,7 @@ CONTAINS
                   END DO
                END IF
                ! Weight function(s) at (k,j,i)
-               IF (.NOT. my_just_gradients .AND. ABS(sum_cell_f_all) .GT. 0.000001) THEN
+               IF (.NOT. my_just_gradients .AND. ABS(sum_cell_f_all) > 0.000001) THEN
                   DO igroup = 1, SIZE(group)
                      group(igroup)%weight%array(k, j, i) = sum_cell_f_group(igroup)/sum_cell_f_all
                   END DO
@@ -683,7 +683,6 @@ CONTAINS
       IF (PRESENT(just_gradients)) my_just_gradients = just_gradients
       IF (my_just_gradients) THEN
          cdft_control%in_memory = .TRUE.
-         cdft_control%atomic_charges = .FALSE.
          hirshfeld_control%print_density = .FALSE.
       END IF
 
@@ -756,8 +755,8 @@ CONTAINS
          CALL pw_set(cdft_control%group(igroup)%hw_rho_total_constraint, 1.0_dp)
 
          IF (igroup == 1) THEN
-            CALL auxbas_pw_pool%create_pw(cdft_control%group(igroup)%hw_rho_total)
-            CALL pw_set(cdft_control%group(igroup)%hw_rho_total, 1.0_dp)
+            CALL auxbas_pw_pool%create_pw(cdft_control%hw_rho_total)
+            CALL pw_set(cdft_control%hw_rho_total, 1.0_dp)
 
             IF (hirshfeld_control%print_density) THEN
                DO iatom = 1, cdft_control%natoms
@@ -825,12 +824,11 @@ CONTAINS
                                                        zetp=alpha, eps=hirshfeld_control%atomic_cutoff, &
                                                        pab=pab, o1=0, o2=0, &  ! without map_consistent
                                                        prefactor=1.0_dp, cutoff=0.0_dp)
-                     ! IF (para_env%is_source()) PRINT *, "radius", radius
                   END IF
 
                   IF (igroup == 1) THEN
                      CALL collocate_pgf_product(0, alpha, 0, 0, 0.0_dp, 0, ra, &
-                                                (/0.0_dp, 0.0_dp, 0.0_dp/), 1.0_dp, pab, 0, 0, &
+                                                [0.0_dp, 0.0_dp, 0.0_dp], 1.0_dp, pab, 0, 0, &
                                                 rs_rho_all, radius=radius, &
                                                 ga_gb_function=GRID_FUNC_AB, use_subpatch=.TRUE., &
                                                 subpatch_pattern=subpatch_pattern)
@@ -838,7 +836,7 @@ CONTAINS
 
                   IF (is_constraint(atom_a)) THEN
                      CALL collocate_pgf_product(0, alpha, 0, 0, 0.0_dp, 0, ra, &
-                                                (/0.0_dp, 0.0_dp, 0.0_dp/), coefficients(atom_a), &
+                                                [0.0_dp, 0.0_dp, 0.0_dp], coefficients(atom_a), &
                                                 pab, 0, 0, rs_rho_constr, &
                                                 radius=radius, &
                                                 ga_gb_function=GRID_FUNC_AB, use_subpatch=.TRUE., &
@@ -852,7 +850,7 @@ CONTAINS
                      END DO
                      CPASSERT(iatom <= cdft_control%natoms)
                      CALL collocate_pgf_product(0, alpha, 0, 0, 0.0_dp, 0, ra, &
-                                                (/0.0_dp, 0.0_dp, 0.0_dp/), 1.0_dp, pab, 0, 0, &
+                                                [0.0_dp, 0.0_dp, 0.0_dp], 1.0_dp, pab, 0, 0, &
                                                 rs_single(iatom), radius=radius, &
                                                 ga_gb_function=GRID_FUNC_AB, use_subpatch=.TRUE., &
                                                 subpatch_pattern=subpatch_pattern)
@@ -866,7 +864,7 @@ CONTAINS
                         END DO
                         CPASSERT(iatom <= cdft_control%natoms)
                         CALL collocate_pgf_product(0, alpha, 0, 0, 0.0_dp, 0, ra, &
-                                                   (/0.0_dp, 0.0_dp, 0.0_dp/), 1.0_dp, pab, 0, 0, &
+                                                   [0.0_dp, 0.0_dp, 0.0_dp], 1.0_dp, pab, 0, 0, &
                                                    rs_single_charge(iatom), radius=radius, &
                                                    ga_gb_function=GRID_FUNC_AB, use_subpatch=.TRUE., &
                                                    subpatch_pattern=subpatch_pattern)
@@ -880,7 +878,7 @@ CONTAINS
          DEALLOCATE (pab)
 
          IF (igroup == 1) THEN
-            CALL transfer_rs2pw(rs_rho_all, cdft_control%group(igroup)%hw_rho_total)
+            CALL transfer_rs2pw(rs_rho_all, cdft_control%hw_rho_total)
          END IF
 
          CALL transfer_rs2pw(rs_rho_constr, cdft_control%group(igroup)%hw_rho_total_constraint)
@@ -889,7 +887,7 @@ CONTAINS
          ! Calculate weight function
          CALL hfun_scale(cdft_control%group(igroup)%weight%array, &
                          cdft_control%group(igroup)%hw_rho_total_constraint%array, &
-                         cdft_control%group(1)%hw_rho_total%array, divide=.TRUE., &
+                         cdft_control%hw_rho_total%array, divide=.TRUE., &
                          small=hirshfeld_control%eps_cutoff)
 
          ! Calculate charges
@@ -898,7 +896,7 @@ CONTAINS
                CALL transfer_rs2pw(rs_single_charge(i), cdft_control%group(igroup)%hw_rho_atomic_charge(i))
                CALL hfun_scale(cdft_control%charge(i)%array, &
                                cdft_control%group(igroup)%hw_rho_atomic_charge(i)%array, &
-                               cdft_control%group(igroup)%hw_rho_total%array, divide=.TRUE., &
+                               cdft_control%hw_rho_total%array, divide=.TRUE., &
                                small=hirshfeld_control%eps_cutoff)
             END DO
          END IF
@@ -918,7 +916,7 @@ CONTAINS
          CALL auxbas_pw_pool%give_back_pw(cdft_control%group(igroup)%hw_rho_total_constraint)
 
          IF (.NOT. cdft_control%in_memory .AND. igroup == 1) THEN
-            CALL auxbas_pw_pool%give_back_pw(cdft_control%group(1)%hw_rho_total)
+            CALL auxbas_pw_pool%give_back_pw(cdft_control%hw_rho_total)
          END IF
 
          IF (hirshfeld_control%print_density .AND. igroup == 1) THEN
@@ -971,17 +969,17 @@ CONTAINS
                   CALL pw_zero(pw_single_dr(i))
                END DO
 
-               atoms_memory_num = SIZE((/(j, j=1, num_species, atoms_memory)/))
+               atoms_memory_num = SIZE([(j, j=1, num_species, atoms_memory)])
 
                ! Can't store all pw grids, therefore split into groups of size atom_memory
                ! Ideally this code should be re-written to be more memory efficient
                IF (num_species > atoms_memory) THEN
                   ALLOCATE (num_species_small(atoms_memory_num + 1))
-                  num_species_small(1:atoms_memory_num) = (/(j, j=1, num_species, atoms_memory)/)
+                  num_species_small(1:atoms_memory_num) = [(j, j=1, num_species, atoms_memory)]
                   num_species_small(atoms_memory_num + 1) = num_species
                ELSE
                   ALLOCATE (num_species_small(2))
-                  num_species_small(:) = (/1, num_species/)
+                  num_species_small(:) = [1, num_species]
                END IF
 
                DO k = 1, SIZE(num_species_small) - 1
@@ -1034,7 +1032,7 @@ CONTAINS
                         END IF
 
                         CALL collocate_pgf_product(0, alpha, 0, 0, 0.0_dp, 0, ra, &
-                                                   (/0.0_dp, 0.0_dp, 0.0_dp/), prefactor, &
+                                                   [0.0_dp, 0.0_dp, 0.0_dp], prefactor, &
                                                    pab, 0, 0, rs_single_dr(iatom + (num_species_small(k) - 1)), &
                                                    radius=radius, &
                                                    ga_gb_function=GRID_FUNC_AB, use_subpatch=.TRUE., &
@@ -1080,6 +1078,15 @@ CONTAINS
       IF (cdft_control%in_memory) THEN
 
          DO igroup = 1, SIZE(cdft_control%group)
+
+            ! Coefficients
+            coefficients(:) = 0.0_dp
+            is_constraint = .FALSE.
+            DO i = 1, SIZE(cdft_control%group(igroup)%atoms)
+               coefficients(cdft_control%group(igroup)%atoms(i)) = cdft_control%group(igroup)%coeff(i)
+               is_constraint(cdft_control%group(igroup)%atoms(i)) = .TRUE.
+            END DO
+
             DO k = lb_pw(3), ub_pw(3)
                DO j = lb_pw(2), ub_pw(2)
                   DO i = lb_pw(1), ub_pw(1)
@@ -1087,13 +1094,13 @@ CONTAINS
 
                      ra(:) = particle_set(iatom)%r
 
-                     IF (cdft_control%group(igroup)%hw_rho_total%array(i, j, k) > hirshfeld_control%eps_cutoff) THEN
+                     IF (cdft_control%hw_rho_total%array(i, j, k) > hirshfeld_control%eps_cutoff) THEN
 
                         exp_eval = (coefficients(iatom) - &
                                     cdft_control%group(igroup)%weight%array(i, j, k))/ &
-                                   cdft_control%group(igroup)%hw_rho_total%array(i, j, k)
+                                   cdft_control%hw_rho_total%array(i, j, k)
 
-                        r2 = (/i*dr_pw(1), j*dr_pw(2), k*dr_pw(3)/) + origin
+                        r2 = [i*dr_pw(1), j*dr_pw(2), k*dr_pw(3)] + origin
                         r_pbc = pbc(ra, r2, cell)
 
                         ! Store gradient d/dR_x w, including term: (r_x - R_x)
@@ -1116,11 +1123,8 @@ CONTAINS
                   END DO
                END DO
             END DO
-
-            IF (igroup == 1) THEN
-               CALL auxbas_pw_pool%give_back_pw(cdft_control%group(1)%hw_rho_total)
-            END IF
          END DO
+         CALL auxbas_pw_pool%give_back_pw(cdft_control%hw_rho_total)
       END IF
 
       CALL rs_grid_release(rs_rho_all)

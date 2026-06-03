@@ -5,44 +5,35 @@
 # shellcheck disable=SC1091
 source /opt/cp2k-toolchain/install/setup
 
-echo -e "\n========== Compiling CP2K =========="
-cd /opt/cp2k
-echo -n "Compiling cp2k... "
-if make -j VERSION=psmp &> make.out; then
-  echo "done."
-else
-  echo -e "failed.\n\n"
-  tail -n 100 make.out
-  mkdir -p /workspace/artifacts/
-  cp make.out /workspace/artifacts/
-  echo -e "\nSummary: Compilation failed."
-  echo -e "Status: FAILED\n"
-  exit 0
-fi
-
 echo -e "\n========== Installing Dependencies =========="
 apt-get update -qq
 apt-get install -qq --no-install-recommends \
   default-jre-headless \
   libsaxonhe-java \
   python3 \
-  python3-pip
+  python3-pip \
+  python3-venv
 rm -rf /var/lib/apt/lists/*
 
-pip3 install --quiet sphinx myst-parser sphinx_rtd_theme lxml
+# Create and activate a virtual environment for Python packages.
+python3 -m venv /opt/venv
+export PATH="/opt/venv/bin:$PATH"
+
+# install python packages
+pip3 install -r /opt/cp2k/docs/requirements.txt
 
 echo -e "\n========== Generating Manual =========="
 
 mkdir -p /workspace/artifacts/manual
 cd /workspace/artifacts/manual
 
-/opt/cp2k/exe/local/cp2k.psmp --version
-/opt/cp2k/exe/local/cp2k.psmp --xml
+/opt/cp2k/build/bin/cp2k.pdbg --version
+/opt/cp2k/build/bin/cp2k.pdbg --xml
 
 set +e # disable error trapping for remainder of script
 (
   set -e # abort if error is encountered
-  /opt/cp2k/docs/generate_input_reference.py ./cp2k_input.xml ./references.html
+  /opt/cp2k/docs/generate_input_reference.py ./cp2k_input.xml
   echo ""
   sphinx-build /opt/cp2k/docs/ /workspace/artifacts/manual -W -n --keep-going --jobs 16
   /opt/cp2k/docs/fix_github_links.py /workspace/artifacts/manual

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,13 +17,14 @@
 ! **************************************************************************************************
 MODULE core_ppl
 
-   USE ai_overlap_ppl,                  ONLY: ppl_integral,&
+   USE ai_overlap_ppl,                  ONLY: ecploc_integral,&
+                                              ppl_integral,&
                                               ppl_integral_ri
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind_set
    USE basis_set_types,                 ONLY: gto_basis_set_p_type,&
                                               gto_basis_set_type
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
                                               dbcsr_get_block_p,&
                                               dbcsr_p_type
    USE external_potential_types,        ONLY: get_potential,&
@@ -88,10 +89,11 @@ CONTAINS
 !> \param cell_to_index ...
 !> \param basis_type ...
 !> \param deltaR Weighting factors of the derivatives wrt. nuclear positions
+!> \param atcore ...
 ! **************************************************************************************************
    SUBROUTINE build_core_ppl(matrix_h, matrix_p, force, virial, calculate_forces, use_virial, nder, &
                              qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ppl, &
-                             nimages, cell_to_index, basis_type, deltaR)
+                             nimages, cell_to_index, basis_type, deltaR, atcore)
 
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_h, matrix_p
       TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
@@ -109,6 +111,8 @@ CONTAINS
       CHARACTER(LEN=*), INTENT(IN)                       :: basis_type
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN), &
          OPTIONAL                                        :: deltaR
+      REAL(KIND=dp), DIMENSION(:), INTENT(INOUT), &
+         OPTIONAL                                        :: atcore
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'build_core_ppl'
       INTEGER, PARAMETER                                 :: nexp_max = 30
@@ -126,10 +130,12 @@ CONTAINS
                                                             nct_lpot, npgfa, npgfb, nsgfa, nsgfb
       INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa, first_sgfb
       INTEGER, DIMENSION(nexp_max)                       :: nct_ppl
-      LOGICAL                                            :: do_dR, dokp, ecp_local, ecp_semi_local, &
-                                                            found, lpotextended, only_gaussians
-      REAL(KIND=dp)                                      :: alpha, dab, dac, dbc, f0, ppl_radius
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: qab, work
+      LOGICAL                                            :: do_dR, doat, dokp, ecp_local, &
+                                                            ecp_semi_local, found, libgrpp_local, &
+                                                            lpotextended, only_gaussians
+      REAL(KIND=dp)                                      :: alpha, atk0, atk1, dab, dac, dbc, f0, &
+                                                            ppl_radius
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: work
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: hab2_w, ppl_fwork, ppl_work
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :, :)  :: hab, pab
       REAL(KIND=dp), ALLOCATABLE, &
@@ -143,6 +149,7 @@ CONTAINS
       TYPE(gto_basis_set_type), POINTER                  :: basis_set_a, basis_set_b
       TYPE(gto_basis_set_p_type), DIMENSION(:), POINTER  :: basis_set_list
       TYPE(gth_potential_type), POINTER                  :: gth_potential
+      REAL(KIND=dp), DIMENSION(SIZE(particle_set))       :: at_thread
       REAL(KIND=dp), DIMENSION(nexp_max)                 :: alpha_ppl
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: cval_lpot, h1_1block, h1_2block, &
                                                             h1_3block, h_block, p_block, rpgfa, &
@@ -160,7 +167,15 @@ CONTAINS
 !$    INTEGER, PARAMETER                                 :: nlock = 501
 
       do_dR = PRESENT(deltaR)
+      doat = PRESENT(atcore)
+      IF ((calculate_forces .OR. doat) .AND. do_dR) THEN
+         CPABORT("core_ppl: incompatible options")
+      END IF
+
       MARK_USED(int_8)
+
+      ! Use internal integral routine for local ECP terms or use libgrrp
+      libgrpp_local = .FALSE.
 
       IF (calculate_forces) THEN
          CALL timeset(routineN//"_forces", handle)
@@ -177,7 +192,7 @@ CONTAINS
          CPASSERT(PRESENT(cell_to_index) .AND. ASSOCIATED(cell_to_index))
       END IF
 
-      IF (calculate_forces) THEN
+      IF (calculate_forces .OR. doat) THEN
          IF (SIZE(matrix_p, 1) == 2) THEN
             DO img = 1, nimages
                CALL dbcsr_add(matrix_p(1, img)%matrix, matrix_p(2, img)%matrix, &
@@ -188,6 +203,7 @@ CONTAINS
          END IF
       END IF
       force_thread = 0.0_dp
+      at_thread = 0.0_dp
 
       maxder = ncoset(nder)
 
@@ -224,14 +240,14 @@ CONTAINS
 !$OMP SHARED  (ap_iterator, basis_set_list, calculate_forces, use_virial, &
 !$OMP          matrix_h, matrix_p, atomic_kind_set, qs_kind_set, particle_set, &
 !$OMP          sab_orb, sac_ppl, nthread, ncoset, nkind, cell_to_index, &
-!$OMP          ldsab,  maxnset, maxder, do_dR, deltaR, &
+!$OMP          ldsab,  maxnset, maxder, do_dR, deltaR, doat, libgrpp_local, &
 !$OMP          maxlgto, nder, maxco, dokp, locks, natom) &
 !$OMP PRIVATE (ikind, jkind, iatom, jatom, rab, basis_set_a, basis_set_b, &
 !$OMP          first_sgfa, la_max, la_min, npgfa, nsgfa, sphi_a, &
 !$OMP          zeta, first_sgfb, lb_max, lb_min, npgfb, nsetb, rpgfb, set_radius_b, sphi_b, &
-!$OMP          zetb, dab, irow, icol, h_block, found, iset, ncoa, &
-!$OMP          sgfa, jset, ncob, sgfb, nsgfb, p_block, work, pab, hab, hab2, hab2_w, qab, &
-!$OMP          h1_1block, h1_2block, h1_3block, kkind, nseta, &
+!$OMP          zetb, dab, irow, icol, h_block, found, iset, ncoa, lock_num, &
+!$OMP          sgfa, jset, ncob, sgfb, nsgfb, p_block, work, pab, hab, hab2, hab2_w, &
+!$OMP          atk0, atk1, h1_1block, h1_2block, h1_3block, kkind, nseta, &
 !$OMP          gth_potential, sgp_potential, alpha, cexp_ppl, lpotextended, &
 !$OMP          ppl_radius, nexp_lpot, nexp_ppl, alpha_ppl, alpha_lpot, nct_ppl, &
 !$OMP          nct_lpot, cval_ppl, cval_lpot, rac, dac, rbc, dbc, &
@@ -240,7 +256,7 @@ CONTAINS
 !$OMP          nloc, nrloc, aloc, bloc, n_local, a_local, c_local, &
 !$OMP          slmax, npot, nrpot, apot, bpot, only_gaussians, &
 !$OMP          ldai, hash, hash1, hash2, iatom8) &
-!$OMP REDUCTION (+ : pv_thread, force_thread )
+!$OMP REDUCTION (+ : pv_thread, force_thread, at_thread )
 
 !$OMP SINGLE
 !$    ALLOCATE (locks(nlock))
@@ -258,7 +274,7 @@ CONTAINS
       ALLOCATE (hab(ldsab, ldsab, maxnset, maxnset), work(ldsab, ldsab*maxder))
       ldai = ncoset(2*maxlgto + 2*nder)
       ALLOCATE (ppl_work(ldai, ldai, MAX(maxder, 2*maxlgto + 2*nder + 1)))
-      IF (calculate_forces) THEN
+      IF (calculate_forces .OR. doat) THEN
          ALLOCATE (pab(maxco, maxco, maxnset, maxnset))
          ldai = ncoset(maxlgto)
          ALLOCATE (ppl_fwork(ldai, ldai, maxder))
@@ -270,7 +286,6 @@ CONTAINS
          IF (do_dR) THEN
             ALLOCATE (hab2(ldsab, ldsab, 4, maxnset, maxnset))
             ALLOCATE (hab2_w(ldsab, ldsab, 6))
-            ALLOCATE (qab(ldsab, ldsab))
             ALLOCATE (ppl_fwork(ldai, ldai, maxder))
          END IF
 
@@ -350,7 +365,7 @@ CONTAINS
 
          CALL dbcsr_get_block_p(matrix_h(1, img)%matrix, irow, icol, h_block, found)
          CPASSERT(found)
-         IF (calculate_forces) THEN
+         IF (calculate_forces .OR. doat) THEN
             NULLIFY (p_block)
             CALL dbcsr_get_block_p(matrix_p(1, img)%matrix, irow, icol, p_block, found)
             IF (ASSOCIATED(p_block)) THEN
@@ -417,8 +432,7 @@ CONTAINS
                   nct_ppl(1:nloc) = nrloc(1:nloc)
                   alpha_ppl(1:nloc) = bloc(1:nloc)
                   cval_ppl(1, 1:nloc) = aloc(1:nloc)
-                  only_gaussians = ALL(nct_ppl(1:nloc) == 2)
-                  IF (only_gaussians) nct_ppl(1:nloc) = nct_ppl(1:nloc) - 1
+                  only_gaussians = .FALSE.
                ELSE
                   CALL get_potential(potential=sgp_potential, n_local=n_local, a_local=a_local, c_local=c_local)
                   nexp_ppl = n_local
@@ -461,6 +475,10 @@ CONTAINS
                      sgfb = first_sgfb(1, jset)
                      IF (set_radius_a(iset) + set_radius_b(jset) < dab) CYCLE
                      ! *** Calculate the GTH pseudo potential forces ***
+                     IF (doat) THEN
+                        atk0 = f0*SUM(hab(1:ncoa, 1:ncob, iset, jset)* &
+                                      pab(1:ncoa, 1:ncob, iset, jset))
+                     END IF
                      IF (calculate_forces) THEN
 
                         force_a(:) = 0.0_dp
@@ -476,8 +494,7 @@ CONTAINS
                               rab, dab, rac, dac, rbc, dbc, &
                               hab(:, :, iset, jset), ppl_work, pab(:, :, iset, jset), &
                               force_a, force_b, ppl_fwork)
-                        ELSE
-
+                        ELSEIF (libgrpp_local) THEN
 !$OMP CRITICAL(type1)
                            CALL libgrpp_local_forces_ref(la_max(iset), la_min(iset), npgfa(iset), &
                                                          rpgfa(:, iset), zeta(:, iset), &
@@ -488,6 +505,16 @@ CONTAINS
                                                          hab(:, :, iset, jset), pab(:, :, iset, jset), &
                                                          force_a, force_b)
 !$OMP END CRITICAL(type1)
+                        ELSE
+                           CALL ecploc_integral( &
+                              la_max(iset), la_min(iset), npgfa(iset), &
+                              rpgfa(:, iset), zeta(:, iset), &
+                              lb_max(jset), lb_min(jset), npgfb(jset), &
+                              rpgfb(:, jset), zetb(:, jset), &
+                              nexp_ppl, alpha_ppl, nct_ppl, cval_ppl, ppl_radius, &
+                              rab, dab, rac, dac, rbc, dbc, &
+                              hab(:, :, iset, jset), ppl_work, pab(:, :, iset, jset), &
+                              force_a, force_b, ppl_fwork)
                         END IF
 
                         IF (ecp_semi_local) THEN
@@ -553,7 +580,7 @@ CONTAINS
                               nexp_ppl, alpha_ppl, nct_ppl, cval_ppl, ppl_radius, &
                               rab, dab, rac, dac, rbc, dbc, hab(:, :, iset, jset), ppl_work)
 
-                        ELSE
+                        ELSEIF (libgrpp_local) THEN
                            !If the local part of the potential is more complex, we need libgrpp
 !$OMP CRITICAL(type1)
                            CALL libgrpp_local_integrals(la_max(iset), la_min(iset), npgfa(iset), &
@@ -564,6 +591,14 @@ CONTAINS
                                                         ppl_radius, rab, dab, rac, dac, dbc, &
                                                         hab(:, :, iset, jset))
 !$OMP END CRITICAL(type1)
+                        ELSE
+                           CALL ecploc_integral( &
+                              la_max(iset), la_min(iset), npgfa(iset), &
+                              rpgfa(:, iset), zeta(:, iset), &
+                              lb_max(jset), lb_min(jset), npgfb(jset), &
+                              rpgfb(:, jset), zetb(:, jset), &
+                              nexp_ppl, alpha_ppl, nct_ppl, cval_ppl, ppl_radius, &
+                              rab, dab, rac, dac, rbc, dbc, hab(:, :, iset, jset), ppl_work)
                         END IF
 
                         IF (ecp_semi_local) THEN
@@ -578,6 +613,12 @@ CONTAINS
                                                             hab(:, :, iset, jset))
 !$OMP END CRITICAL(type2)
                         END IF
+                     END IF
+                     ! calculate atomic contributions
+                     IF (doat) THEN
+                        atk1 = f0*SUM(hab(1:ncoa, 1:ncob, iset, jset)* &
+                                      pab(1:ncoa, 1:ncob, iset, jset))
+                        at_thread(katom) = at_thread(katom) + (atk1 - atk0)
                      END IF
                   END DO
                END DO
@@ -666,11 +707,11 @@ CONTAINS
             END DO
          END DO
          END IF
-         IF (do_dR) DEALLOCATE (qab, hab2, ppl_fwork, hab2_w)
+         IF (do_dR) DEALLOCATE (hab2, ppl_fwork, hab2_w)
       END DO ! slot
 
       DEALLOCATE (hab, work, ppl_work)
-      IF (calculate_forces) THEN
+      IF (calculate_forces .OR. doat) THEN
          DEALLOCATE (pab, ppl_fwork)
       END IF
 
@@ -690,7 +731,7 @@ CONTAINS
 
       DEALLOCATE (basis_set_list)
 
-      IF (calculate_forces) THEN
+      IF (calculate_forces .OR. doat) THEN
          ! *** If LSD, then recover alpha density and beta density     ***
          ! *** from the total density (1) and the spin density (2)     ***
          IF (SIZE(matrix_p, 1) == 2) THEN
@@ -713,6 +754,9 @@ CONTAINS
          END DO
 !$OMP END DO
          DEALLOCATE (atom_of_kind, kind_of)
+      END IF
+      IF (doat) THEN
+         atcore(1:natom) = atcore(1:natom) + at_thread(1:natom)
       END IF
 
       IF (calculate_forces .AND. use_virial) THEN
@@ -816,7 +860,7 @@ CONTAINS
 !$OMP SHARED  (maxco,maxsgf,basis_set_list,calculate_forces,lri_ppl_coef,qs_kind_set,&
 !$OMP          locks,natom,use_virial,virial,ncoset,atom_of_kind,sac_ppl) &
 !$OMP PRIVATE (ikind,kkind,iatom,katom,atom_a,rac,va,dva,dvas,basis_set,slot,&
-!$OMP          first_sgfa,la_max,la_min,npgfa,nseta,nsgfa,rpgfa,set_radius_a,&
+!$OMP          first_sgfa,la_max,la_min,npgfa,nseta,nsgfa,rpgfa,set_radius_a,lock_num,&
 !$OMP          sphi_a,zeta,gth_potential,sgp_potential,alpha,cexp_ppl,lpotextended,ppl_radius,&
 !$OMP          nexp_ppl,alpha_ppl,nct_ppl,cval_ppl,nloc,n_local,nrloc,a_local,aloc,bloc,c_local,nfun,work,&
 !$OMP          hash,dac,force_a,iset,sgfa,sgfb,ncoa,bcon,cval_lpot,nct_lpot,alpha_lpot,nexp_lpot,&

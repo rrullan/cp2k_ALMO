@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,6 +16,7 @@ MODULE s_square_methods
 
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: s2_restraint_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_release,&
@@ -24,7 +25,6 @@ MODULE s_square_methods
                                               cp_fm_get_info,&
                                               cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_constants,                 ONLY: do_s2_constraint,&
                                               do_s2_restraint
    USE kinds,                           ONLY: dp
@@ -121,7 +121,7 @@ CONTAINS
             CALL cp_fm_struct_release(fm_struct_tmp)
             ! Create S*C(beta)
             CALL cp_fm_get_info(c_beta, matrix_struct=fm_struct_tmp)
-            CALL cp_fm_create(scb, fm_struct_tmp, name="S*C(beta)")
+            CALL cp_fm_create(scb, fm_struct_tmp, name="S*C(beta)", set_zero=.TRUE.)
             ! Compute S*C(beta)
             CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, c_beta, scb, nbeta)
             ! Compute C(alpha)^T*S*C(beta)
@@ -148,7 +148,7 @@ CONTAINS
                CALL parallel_gemm('N', 'T', nao, nalpha, nbeta, -strength, scb, catscb, 1.0_dp, mo_derivs(1))
                ! Create S*C(alpha)
                CALL cp_fm_get_info(c_alpha, matrix_struct=fm_struct_tmp)
-               CALL cp_fm_create(sca, fm_struct_tmp, name="S*C(alpha)")
+               CALL cp_fm_create(sca, fm_struct_tmp, name="S*C(alpha)", set_zero=.TRUE.)
                ! Compute S*C(alpha)
                CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, c_alpha, sca, nalpha)
                ! Add -strength*S*C(alpha)*C(alpha)^T*S*C(beta) to the beta MO derivatives
@@ -168,7 +168,7 @@ CONTAINS
          END IF
       CASE DEFAULT
          ! We should never get here
-         CPABORT("Alpha, beta, what else ?")
+         CPABORT("Alpha, beta, what else?")
       END SELECT
 
       CALL timestop(handle)

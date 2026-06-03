@@ -6,8 +6,8 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-openmpi_ver="4.1.6"
-openmpi_sha256="f740994485516deb63b5311af122c265179f5328a0d857a567b85db00b11e415"
+openmpi_ver="5.0.10"
+openmpi_sha256="0acecc4fc218e5debdbcb8a41d182c6b0f1d29393015ed763b2a91d5d7374cc6"
 openmpi_pkg="openmpi-${openmpi_ver}.tar.bz2"
 
 source "${SCRIPT_DIR}"/common_vars.sh
@@ -19,9 +19,6 @@ source "${INSTALLDIR}"/toolchain.env
 [ ${MPI_MODE} != "openmpi" ] && exit 0
 [ -f "${BUILDDIR}/setup_openmpi" ] && rm "${BUILDDIR}/setup_openmpi"
 
-OPENMPI_CFLAGS=""
-OPENMPI_LDFLAGS=""
-OPENMPI_LIBS=""
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -33,11 +30,7 @@ case "${with_openmpi}" in
     if verify_checksums "${install_lock_file}"; then
       echo "openmpi-${openmpi_ver} is already installed, skipping it."
     else
-      if [ -f ${openmpi_pkg} ]; then
-        echo "${openmpi_pkg} is found"
-      else
-        download_pkg_from_cp2k_org "${openmpi_sha256}" "${openmpi_pkg}"
-      fi
+      retrieve_package "${openmpi_sha256}" "${openmpi_pkg}"
       echo "Installing from scratch into ${pkg_install_dir}"
       [ -d openmpi-${openmpi_ver} ] && rm -rf openmpi-${openmpi_ver}
       tar -xjf ${openmpi_pkg}
@@ -55,28 +48,22 @@ case "${with_openmpi}" in
           CFLAGS="${CFLAGS} -fgnu89-inline"
         fi
       fi
-      if [ $(command -v srun) ]; then
-        echo "Slurm installation found. OpenMPI will be configured with --with-pmi."
-        EXTRA_CONFIGURE_FLAGS="--with-pmi"
-      else
-        EXTRA_CONFIGURE_FLAGS=""
-      fi
-      # We still require MPI-1.0-compatability for PTSCOTCH
+
       ./configure CFLAGS="${CFLAGS}" \
         --prefix=${pkg_install_dir} \
         --libdir="${pkg_install_dir}/lib" \
-        --enable-mpi1-compatibility \
-        ${EXTRA_CONFIGURE_FLAGS} \
-        > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-      make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        --enable-static \
+        --with-libevent=internal \
+        > configure.log 2>&1 || tail_excerpt configure.log
+      make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+      make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage1/$(basename ${SCRIPT_NAME})"
     fi
     check_dir "${pkg_install_dir}/bin"
     check_dir "${pkg_install_dir}/lib"
     check_dir "${pkg_install_dir}/include"
-    check_install ${pkg_install_dir}/bin/mpiexec "openmpi" && MPIRUN="${pkg_install_dir}/bin/mpiexec" || exit 1
+    check_install ${pkg_install_dir}/bin/mpiexec "openmpi" && MPIEXEC="${pkg_install_dir}/bin/mpiexec" || exit 1
     check_install ${pkg_install_dir}/bin/mpicc "openmpi" && MPICC="${pkg_install_dir}/bin/mpicc" || exit 1
     check_install ${pkg_install_dir}/bin/mpicxx "openmpi" && MPICXX="${pkg_install_dir}/bin/mpicxx" || exit 1
     check_install ${pkg_install_dir}/bin/mpifort "openmpi" && MPIFC="${pkg_install_dir}/bin/mpifort" || exit 1
@@ -87,7 +74,7 @@ case "${with_openmpi}" in
     ;;
   __SYSTEM__)
     echo "==================== Finding OpenMPI from system paths ===================="
-    check_command mpiexec "openmpi" && MPIRUN="$(command -v mpiexec)"
+    check_command mpiexec "openmpi" && MPIEXEC="$(command -v mpiexec)"
     check_command mpicc "openmpi" && MPICC="$(command -v mpicc)" || exit 1
     check_command mpic++ "openmpi" && MPICXX="$(command -v mpic++)" || exit 1
     check_command mpifort "openmpi" && MPIFC="$(command -v mpifort)" || exit 1
@@ -107,7 +94,7 @@ case "${with_openmpi}" in
     check_dir "${pkg_install_dir}/bin"
     check_dir "${pkg_install_dir}/lib"
     check_dir "${pkg_install_dir}/include"
-    check_command ${pkg_install_dir}/bin/mpiexec "openmpi" && MPIRUN="${pkg_install_dir}/bin/mpiexec" || exit 1
+    check_command ${pkg_install_dir}/bin/mpiexec "openmpi" && MPIEXEC="${pkg_install_dir}/bin/mpiexec" || exit 1
     check_command ${pkg_install_dir}/bin/mpicc "openmpi" && MPICC="${pkg_install_dir}/bin/mpicc" || exit 1
     check_command ${pkg_install_dir}/bin/mpic++ "openmpi" && MPICXX="${pkg_install_dir}/bin/mpic++" || exit 1
     check_command ${pkg_install_dir}/bin/mpifort "openmpi" && MPIFC="${pkg_install_dir}/bin/mpifort" || exit 1
@@ -139,7 +126,7 @@ if [ "${with_openmpi}" != "__DONTUSE__" ]; then
   done
   cat << EOF > "${BUILDDIR}/setup_openmpi"
 export MPI_MODE="${MPI_MODE}"
-export MPIRUN="${MPIRUN}"
+export MPIEXEC="${MPIEXEC}"
 export MPICC="${MPICC}"
 export MPICXX="${MPICXX}"
 export MPIFC="${MPIFC}"
@@ -154,7 +141,7 @@ export MPI_LIBS="${OPENMPI_LIBS}"
 export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__parallel|)"
 # For proper mpi_f08 support, we need at least GCC version 9 (asynchronous keyword)
 # Other compilers should work
-  if ! [ "$(gfortran -dumpversion | cut -d. -f1)" -lt 9 ]; then
+  if ! [ "\$(gfortran -dumpversion | cut -d. -f1)" -lt 9 ]; then
     export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__MPI_F08|)"
   fi
 export CP_CFLAGS="\${CP_CFLAGS} IF_MPI(${OPENMPI_CFLAGS}|)"
@@ -170,7 +157,7 @@ prepend_path LIBRARY_PATH "${pkg_install_dir}/lib"
 prepend_path CPATH "${pkg_install_dir}/include"
 EOF
   fi
-  cat "${BUILDDIR}/setup_openmpi" >> ${SETUPFILE}
+  filter_setup "${BUILDDIR}/setup_openmpi" "${SETUPFILE}"
 fi
 
 # ----------------------------------------------------------------------

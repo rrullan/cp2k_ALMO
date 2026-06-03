@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,7 +12,14 @@
 MODULE cp_control_types
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE input_constants,                 ONLY: do_full_density
+   USE eeq_input,                       ONLY: eeq_solver_type
+   USE input_constants,                 ONLY: &
+        do_full_density, rtp_bse_ham_G0W0, rtp_method_tddft, tblite_cli_born_kernel_auto, &
+        tblite_cli_solution_state_gsolv, tblite_cli_solvation_none, tblite_guess_ceh, &
+        tblite_guess_sad, tblite_mixer_damping_default, tblite_mixer_iterations_default, &
+        tblite_mixer_max_weight_default, tblite_mixer_min_weight_default, &
+        tblite_mixer_omega0_default, tblite_mixer_weight_factor_default, tblite_scc_mixer_auto, &
+        tblite_solver_gvd, use_mom_ref_coac
    USE kinds,                           ONLY: default_path_length,&
                                               default_string_length,&
                                               dp
@@ -21,13 +28,33 @@ MODULE cp_control_types
    USE qs_cdft_types,                   ONLY: cdft_control_create,&
                                               cdft_control_release,&
                                               cdft_control_type
+   USE smeagol_control_types,           ONLY: smeagol_control_create,&
+                                              smeagol_control_release,&
+                                              smeagol_control_type
    USE xas_control,                     ONLY: xas_control_release,&
                                               xas_control_type
+   USE xas_tdp_types,                   ONLY: xas_tdp_control_create,&
+                                              xas_tdp_control_release,&
+                                              xas_tdp_control_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
 
    PRIVATE
+
+!***************************************************************************************************
+!\brief Control parameters for hairy-probes DFT
+!***************************************************************************************************
+   TYPE hairy_probes_type
+      REAL(KIND=dp)                        :: alpha = 0.0_dp     ! solution probes parameter
+      REAL(KIND=dp)                        :: mu = 0.0_dp        ! chemical potenatial of electrons in reservoir
+      REAL(KIND=dp)                        :: T = 0.0_dp         ! temperature of electrons in reservoir
+      REAL(KIND=dp)                        :: eps_hp = 0.0_dp    ! tolerance for accuracy checks on occupation numbers
+      INTEGER                              :: natoms = 0, &
+                                              last_ao = 0, &
+                                              first_ao = 0
+      INTEGER, DIMENSION(:), POINTER       :: atom_ids => NULL() ! atom ids to which the probes are attached
+   END TYPE hairy_probes_type
 
 ! **************************************************************************************************
 ! \brief Control parameters for pw grids
@@ -38,14 +65,17 @@ MODULE cp_control_types
       INTEGER, DIMENSION(2)                :: distribution_layout = 0
       INTEGER                              :: blocked = 0
    END TYPE pw_grid_option
+
 ! **************************************************************************************************
 ! \brief parameters for EMD/RTP calculations involving MO projections
 ! **************************************************************************************************
    TYPE proj_mo_type
       INTEGER, DIMENSION(:), ALLOCATABLE         :: ref_mo_index
       INTEGER                                    :: ref_mo_spin = 1
+      INTEGER                                    :: ref_nlumo = 0
       LOGICAL                                    :: sum_on_all_ref = .FALSE.
       INTEGER, DIMENSION(:), ALLOCATABLE         :: td_mo_index
+      REAL(dp), DIMENSION(:), ALLOCATABLE        :: td_mo_occ
       INTEGER                                    :: td_mo_spin = 1
       LOGICAL                                    :: sum_on_all_td = .FALSE.
       CHARACTER(LEN=default_path_length)         :: ref_mo_file_name = ""
@@ -57,6 +87,7 @@ MODULE cp_control_types
    TYPE proj_mo_p_type
       TYPE(proj_mo_type), POINTER                :: proj_mo => NULL()
    END TYPE proj_mo_p_type
+
 ! **************************************************************************************************
 ! \brief Control parameters for REAL_TIME_PROPAGATION calculations
 ! **************************************************************************************************
@@ -67,6 +98,8 @@ MODULE cp_control_types
       INTEGER                              :: mat_exp = 0
       INTEGER                              :: propagator = 0
       LOGICAL                              :: fixed_ions = .FALSE.
+      INTEGER                              :: rtp_method = rtp_method_tddft
+      INTEGER                              :: rtbse_ham = rtp_bse_ham_G0W0
       INTEGER                              :: initial_wfn = 0
       REAL(dp)                             :: eps_exp = 0.0_dp
       LOGICAL                              :: initial_step = .FALSE.
@@ -85,12 +118,33 @@ MODULE cp_control_types
       INTEGER, DIMENSION(3)                :: delta_pulse_direction = 0
       REAL(KIND=dp)                        :: delta_pulse_scale = 0.0_dp
       LOGICAL                              :: velocity_gauge = .FALSE.
+      REAL(KIND=dp), DIMENSION(3)          :: field = 0.0_dp
       REAL(KIND=dp), DIMENSION(3)          :: vec_pot = 0.0_dp
       LOGICAL                              :: nl_gauge_transform = .FALSE.
       LOGICAL                              :: is_proj_mo = .FALSE.
       TYPE(proj_mo_p_type), DIMENSION(:), &
          POINTER                :: proj_mo_list => NULL()
+      ! Switch to turn on moments trace saving
+      LOGICAL                              :: save_local_moments = .FALSE.
+      INTEGER                              :: moment_trace_ref_type = use_mom_ref_coac
+      REAL(dp), DIMENSION(:), POINTER      :: moment_trace_user_ref_point => NULL()
+      REAL(dp)                             :: ft_damping = -1.0_dp
+      REAL(dp)                             :: ft_t0 = 0.0_dp
+      ! Index 1 : number of the element, Index 2 : coordinates
+      ! e.g. if xx and xz elements are to be printed
+      ! print_pol_elements(1,1) = 1
+      ! print_pol_elements(1,2) = 1
+      ! print_pol_elements(2,1) = 1
+      ! print_pol_elements(2,2) = 3
+      INTEGER, DIMENSION(:, :), POINTER    :: print_pol_elements => NULL()
+      LOGICAL                              :: pade_requested = .FALSE.
+      REAL(dp)                             :: pade_e_min = 0.0_dp
+      REAL(dp)                             :: pade_e_step = 0.02_dp
+      REAL(dp)                             :: pade_e_max = 100.0_dp
+      REAL(dp)                             :: pade_fit_e_min = 0.0_dp
+      REAL(dp)                             :: pade_fit_e_max = 300.0_dp
    END TYPE rtp_control_type
+
 ! **************************************************************************************************
 ! \brief Control parameters for DFTB calculations
 ! **************************************************************************************************
@@ -98,10 +152,19 @@ MODULE cp_control_types
       LOGICAL                              :: self_consistent = .FALSE.
       LOGICAL                              :: orthogonal_basis = .FALSE.
       LOGICAL                              :: dispersion = .FALSE.
+      INTEGER                              :: tblite_scc_mixer = tblite_scc_mixer_auto
       INTEGER                              :: dispersion_type = 0
+      INTEGER                              :: tblite_mixer_iterations = tblite_mixer_iterations_default
+      INTEGER                              :: tblite_mixer_memory = tblite_mixer_iterations_default
+      INTEGER                              :: tblite_mixer_solver = tblite_solver_gvd
       LOGICAL                              :: dftb3_diagonal = .FALSE.
       LOGICAL                              :: hb_sr_damp = .FALSE.
       REAL(KIND=dp)                        :: hb_sr_para = 0.0_dp
+      REAL(KIND=dp)                        :: tblite_mixer_damping = tblite_mixer_damping_default
+      REAL(KIND=dp)                        :: tblite_mixer_max_weight = tblite_mixer_max_weight_default
+      REAL(KIND=dp)                        :: tblite_mixer_min_weight = tblite_mixer_min_weight_default
+      REAL(KIND=dp)                        :: tblite_mixer_omega0 = tblite_mixer_omega0_default
+      REAL(KIND=dp)                        :: tblite_mixer_weight_factor = tblite_mixer_weight_factor_default
       REAL(KIND=dp)                        :: eps_disp = 0.0_dp
       REAL(KIND=dp)                        :: epscn = 0.0_dp
       REAL(KIND=dp)                        :: exp_pre = 0.0_dp
@@ -121,13 +184,98 @@ MODULE cp_control_types
 ! **************************************************************************************************
 ! \brief Control parameters for xTB calculations
 ! **************************************************************************************************
+   TYPE xtb_reference_cli_guess_type
+      LOGICAL                              :: enabled = .FALSE.
+      LOGICAL                              :: efield_active = .FALSE.
+      LOGICAL                              :: grad = .FALSE.
+      INTEGER                              :: method = tblite_guess_ceh
+      INTEGER                              :: solver = tblite_solver_gvd
+      REAL(KIND=dp), DIMENSION(3)          :: efield = 0.0_dp
+      REAL(KIND=dp)                        :: electronic_temperature_guess = 0.0_dp
+      CHARACTER(LEN=default_path_length)   :: input_file = ""
+      CHARACTER(LEN=default_path_length)   :: json_file = ""
+      CHARACTER(LEN=default_string_length) :: input_format = "gen"
+   END TYPE xtb_reference_cli_guess_type
+
+   TYPE xtb_reference_cli_param_type
+      LOGICAL                              :: enabled = .FALSE.
+      LOGICAL                              :: method_explicit = .FALSE.
+      INTEGER                              :: method = 0
+      CHARACTER(LEN=default_path_length)   :: input_file = ""
+      CHARACTER(LEN=default_path_length)   :: output_file = ""
+   END TYPE xtb_reference_cli_param_type
+
+   TYPE xtb_reference_cli_fit_type
+      LOGICAL                              :: enabled = .FALSE.
+      LOGICAL                              :: dry_run = .FALSE.
+      CHARACTER(LEN=default_path_length)   :: copy_file = ""
+      CHARACTER(LEN=default_path_length)   :: input_file = ""
+      CHARACTER(LEN=default_path_length)   :: param_file = ""
+   END TYPE xtb_reference_cli_fit_type
+
+   TYPE xtb_reference_cli_tagdiff_type
+      LOGICAL                              :: enabled = .FALSE.
+      LOGICAL                              :: fit = .FALSE.
+      CHARACTER(LEN=default_path_length)   :: actual_file = ""
+      CHARACTER(LEN=default_path_length)   :: reference_file = ""
+   END TYPE xtb_reference_cli_tagdiff_type
+
+   TYPE xtb_reference_cli_type
+      LOGICAL                              :: enabled = .FALSE.
+      LOGICAL                              :: check_energy = .TRUE.
+      LOGICAL                              :: check_forces = .TRUE.
+      LOGICAL                              :: check_virial = .FALSE.
+      LOGICAL                              :: keep_files = .FALSE.
+      LOGICAL                              :: stop_on_error = .FALSE.
+      LOGICAL                              :: efield_active = .FALSE.
+      LOGICAL                              :: solvation_active = .FALSE.
+      INTEGER                              :: guess = tblite_guess_sad
+      INTEGER                              :: solvation_born_kernel = tblite_cli_born_kernel_auto
+      INTEGER                              :: solvation_model = tblite_cli_solvation_none
+      INTEGER                              :: solvation_state = tblite_cli_solution_state_gsolv
+      REAL(KIND=dp), DIMENSION(3)          :: efield = 0.0_dp
+      REAL(KIND=dp)                        :: electronic_temperature_guess = 0.0_dp
+      REAL(KIND=dp)                        :: error_limit = 1.0E-8_dp
+      CHARACTER(LEN=default_path_length)   :: program_name = "tblite"
+      CHARACTER(LEN=default_path_length)   :: grad_file = ""
+      CHARACTER(LEN=default_path_length)   :: json_file = ""
+      CHARACTER(LEN=default_path_length)   :: post_processing = ""
+      CHARACTER(LEN=default_path_length)   :: post_processing_output_file = ""
+      CHARACTER(LEN=default_path_length)   :: restart_file = ""
+      CHARACTER(LEN=default_path_length)   :: solvation_solvent = ""
+      CHARACTER(LEN=default_path_length)   :: work_directory = "."
+      CHARACTER(LEN=default_path_length)   :: prefix = "tblite-reference"
+      CHARACTER(LEN=default_string_length) :: input_format = "gen"
+      TYPE(xtb_reference_cli_guess_type)    :: guess_cli
+      TYPE(xtb_reference_cli_param_type)    :: param_cli
+      TYPE(xtb_reference_cli_fit_type)      :: fit_cli
+      TYPE(xtb_reference_cli_tagdiff_type)  :: tagdiff_cli
+   END TYPE xtb_reference_cli_type
+
    TYPE xtb_control_type
       !
+      INTEGER                              :: gfn_type = 1
+      !
       LOGICAL                              :: do_ewald = .FALSE.
+      LOGICAL                              :: do_tblite = .FALSE.
+      LOGICAL                              :: tblite_mixer_damping_explicit = .FALSE.
       !
       INTEGER                              :: sto_ng = 0
       INTEGER                              :: h_sto_ng = 0
+      INTEGER                              :: tblite_method = 0
+      INTEGER                              :: tblite_scc_mixer = tblite_scc_mixer_auto
+      INTEGER                              :: tblite_mixer_iterations = tblite_mixer_iterations_default
+      INTEGER                              :: tblite_mixer_memory = tblite_mixer_iterations_default
+      INTEGER                              :: tblite_mixer_solver = tblite_solver_gvd
+      REAL(KIND=dp)                        :: tblite_accuracy = 1.0_dp
+      REAL(KIND=dp)                        :: tblite_mixer_damping = tblite_mixer_damping_default
+      REAL(KIND=dp)                        :: tblite_mixer_max_weight = tblite_mixer_max_weight_default
+      REAL(KIND=dp)                        :: tblite_mixer_min_weight = tblite_mixer_min_weight_default
+      REAL(KIND=dp)                        :: tblite_mixer_omega0 = tblite_mixer_omega0_default
+      REAL(KIND=dp)                        :: tblite_mixer_weight_factor = tblite_mixer_weight_factor_default
+      CHARACTER(LEN=default_path_length)   :: tblite_param_file = ""
       !
+      INTEGER                              :: vdw_type = -1
       CHARACTER(LEN=default_path_length)   :: parameter_file_path = ""
       CHARACTER(LEN=default_path_length)   :: parameter_file_name = ""
       !
@@ -141,7 +289,10 @@ MODULE cp_control_types
       REAL(KIND=dp)                        :: kg = 0.0_dp, kf = 0.0_dp
       REAL(KIND=dp)                        :: kcns = 0.0_dp, kcnp = 0.0_dp, kcnd = 0.0_dp
       REAL(KIND=dp)                        :: ken = 0.0_dp
+      REAL(KIND=dp)                        :: ksen = 0.0_dp, kpen = 0.0_dp, kden = 0.0_dp
+      REAL(KIND=dp)                        :: ben = 0.0_dp
       REAL(KIND=dp)                        :: kxr = 0.0_dp, kx2 = 0.0_dp
+      REAL(KIND=dp)                        :: enscale = 0.0_dp
       !
       LOGICAL                              :: xb_interaction = .FALSE.
       LOGICAL                              :: do_nonbonded = .FALSE.
@@ -149,7 +300,7 @@ MODULE cp_control_types
       LOGICAL                              :: coulomb_lr = .FALSE.
       LOGICAL                              :: tb3_interaction = .FALSE.
       LOGICAL                              :: check_atomic_charges = .FALSE.
-      LOGICAL                              :: old_coulomb_damping = .FALSE.
+      LOGICAL                              :: var_dipole = .FALSE.
       !
       REAL(KIND=dp)                        :: xb_radius = 0.0_dp
       REAL(KIND=dp)                        :: coulomb_sr_cut = 0.0_dp
@@ -162,6 +313,18 @@ MODULE cp_control_types
       REAL, DIMENSION(:), POINTER          :: kab_vals => NULL()
       !
       TYPE(pair_potential_p_type), POINTER :: nonbonded => NULL()
+      REAL(KIND=dp)                        :: eps_pair = 0.0_dp
+      REAL(KIND=dp), DIMENSION(:, :), &
+         POINTER                           :: rcpair => NULL()
+      !
+      ! SRB terms
+      REAL(KIND=dp)                        :: ksrb = 0.0_dp, esrb = 0.0_dp, gscal = 0.0_dp
+      REAL(KIND=dp)                        :: c1srb = 0.0_dp, c2srb = 0.0_dp, shift = 0.0_dp
+      !
+      ! EN shift in EEQ (molecular=1 or crystaline=2)
+      INTEGER                              :: enshift_type = 1
+      TYPE(eeq_solver_type)                :: eeq_sparam ! parameters for EEQ solver
+      TYPE(xtb_reference_cli_type)          :: reference_cli
    END TYPE xtb_control_type
 
 ! **************************************************************************************************
@@ -203,7 +366,9 @@ MODULE cp_control_types
                                               lmax_rho0 = 0, &
                                               lmax_sphere = 0, &
                                               quadrature = 0
-      LOGICAL                              :: lrho1_eq_lrho0 = .FALSE.
+      LOGICAL                              :: accurate_xcint = .FALSE.
+      REAL(KIND=dp)                        :: aweights = 0.0_dp
+      REAL(KIND=dp), DIMENSION(:), POINTER  :: aw => NULL()
       LOGICAL                              :: alpha0_hard_from_input = .FALSE., &
                                               force_paw = .FALSE., &
                                               non_paw_atoms = .FALSE., &
@@ -211,6 +376,7 @@ MODULE cp_control_types
       REAL(KIND=dp)                        :: alpha0_hard = 0.0_dp
       REAL(KIND=dp)                        :: max_rad_local = 0.0_dp
    END TYPE gapw_control_type
+
 ! **************************************************************************************************
 ! \brief parameters for calculations involving a time dependent electric field
 ! **************************************************************************************************
@@ -229,6 +395,7 @@ MODULE cp_control_types
    TYPE efield_p_type
       TYPE(efield_type), POINTER           :: efield => NULL()
    END TYPE efield_p_type
+
 ! **************************************************************************************************
 ! \brief parameters for calculations involving a time dependent electric field
 ! **************************************************************************************************
@@ -237,6 +404,9 @@ MODULE cp_control_types
       REAL(KIND=dp), DIMENSION(3)          :: polarisation = 0.0_dp
       REAL(KIND=dp), DIMENSION(3)          :: d_filter = 0.0_dp
       REAL(KIND=dp)                        :: strength = 0.0_dp
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:) :: strength_list
+      INTEGER                              :: start_frame = 0
+      INTEGER                              :: end_frame = -1
    END TYPE period_efield_type
 
 ! **************************************************************************************************
@@ -402,45 +572,6 @@ MODULE cp_control_types
    END TYPE sccs_control_type
 
 ! **************************************************************************************************
-! \brief Control parameters for a TIME-DEPENDENT PERTURBATION calculation
-! \par  ATTRIBUTES
-!   - n_ev       : number of eigenvalues to calculate
-!   - n_reortho  : how many time to reorthogonalize (in the lanczos algorithm)
-!   - do_kernel  : wether to evaluate the kernel (this is a debugging option)
-!   - res_etype : { SINGLET | TRIPLET } which excitations
-!                  to calculate
-!   - lumos_eigenvalues : holds the eigenvalues of the lumos (if calculated in QS)
-!
-! \par  NOTES
-!   The lumos are helpful in choosing a initial vector for the TDDFPT
-!   calculation, since they can be used to construct the solutions of the
-!   TDDFPT operator without the perturbation kernel.
-! **************************************************************************************************
-   TYPE tddfpt_control_type
-      TYPE(cp_fm_type), DIMENSION(:), &
-         POINTER                           :: lumos => NULL()
-      REAL(KIND=dp)                        :: tolerance = 0.0_dp
-      INTEGER                              :: n_ev = 0
-      INTEGER                              :: max_kv = 0
-      INTEGER                              :: n_restarts = 0
-      INTEGER                              :: n_reortho = 0
-      LOGICAL                              :: do_kernel = .FALSE.
-      LOGICAL                              :: lsd_singlets = .FALSE.
-      LOGICAL                              :: invert_S = .FALSE.
-      LOGICAL                              :: precond = .FALSE.
-      LOGICAL                              :: drho_by_collocation = .FALSE.
-      LOGICAL                              :: use_kinetic_energy_density = .FALSE.
-      INTEGER                              :: res_etype = 0
-      INTEGER                              :: diag_method = 0
-      INTEGER                              :: oe_corr = 0
-      INTEGER                              :: sic_method_id = 0
-      INTEGER                              :: sic_list_id = 0
-      REAL(KIND=dp)                        :: sic_scaling_a = 0.0_dp, sic_scaling_b = 0.0_dp
-      REAL(KIND=dp), DIMENSION(:, :), &
-         POINTER                           :: lumos_eigenvalues => NULL()
-   END TYPE tddfpt_control_type
-
-! **************************************************************************************************
 ! \brief Control parameters for simplified Tamm Dancoff approximation (sTDA)
 ! \par  ATTRIBUTES
 ! \par  NOTES
@@ -455,6 +586,33 @@ MODULE cp_control_types
       REAL(KIND=dp)                          :: coulomb_sr_cut = 0.0_dp
       REAL(KIND=dp)                          :: coulomb_sr_eps = 0.0_dp
    END TYPE stda_control_type
+
+! **************************************************************************************************
+! \brief Control parameters for smeared occupation
+! \par  ATTRIBUTES
+! \par  NOTES
+! **************************************************************************************************
+   TYPE smeared_type
+      REAL(KIND=dp), DIMENSION(:), POINTER :: fermia => NULL()
+      REAL(KIND=dp), DIMENSION(:, :), POINTER :: fermib => NULL()
+   END TYPE smeared_type
+
+! **************************************************************************************************
+! \brief Control parameters for the planar averaged Hartree potential
+! **************************************************************************************************
+   TYPE paep_control_type
+      INTEGER                              :: surf_normal = 0
+   END TYPE paep_control_type
+
+! **************************************************************************************************
+! \brief Control parameters for the planar counter charge density
+! **************************************************************************************************
+   TYPE pcc_control_type
+      INTEGER                              :: surf_normal = 0
+      REAL(KIND=dp)                        :: dist_edge = 0.0_dp, &
+                                              gau_a = 0.0_dp, &
+                                              gau_c = 0.0_dp
+   END TYPE pcc_control_type
 
 ! **************************************************************************************************
 ! \brief Control parameters for a Time-Dependent DFT calculation.
@@ -474,12 +632,15 @@ MODULE cp_control_types
       INTEGER                              :: nprocs = 0
       !> type of kernel function/approximation to use
       INTEGER                              :: kernel = 0
+      !> type of spin excitations to compute
+      INTEGER                              :: spinflip = 0
       !> for full kernel, do we have HFX/ADMM
       LOGICAL                              :: do_hfx = .FALSE.
       LOGICAL                              :: do_admm = .FALSE.
       !> for full kernel, do we have short-range/long-range HFX and/or Kxc potential
       LOGICAL                              :: do_hfxsr = .FALSE.
       LOGICAL                              :: hfxsr_re_int = .TRUE.
+      INTEGER                              :: hfxsr_primbas = 0
       LOGICAL                              :: do_hfxlr = .FALSE.
       REAL(KIND=dp)                        :: hfxlr_rcut = 0.0_dp, hfxlr_scale = 0.0_dp
       LOGICAL                              :: do_exck = .FALSE.
@@ -489,6 +650,8 @@ MODULE cp_control_types
       INTEGER                              :: oe_corr = 0
       !> eigenvalue shifts
       REAL(KIND=dp)                        :: ev_shift = 0.0_dp, eos_shift = 0.0_dp
+      !> active orbitals
+      INTEGER, DIMENSION(2)                :: nactive = -1
       !> target accuracy
       REAL(kind=dp)                        :: conv = 0.0_dp
       !> the smallest excitation amplitude to print
@@ -502,12 +665,21 @@ MODULE cp_control_types
       LOGICAL                              :: rks_triplets = .FALSE.
       !> local resolution of identity for Coulomb contribution
       LOGICAL                              :: do_lrigpw = .FALSE.
+      !> smeared occupation
+      LOGICAL                              :: do_smearing = .FALSE.
+      !> dynamical correlation
+      LOGICAL                              :: do_bse = .FALSE.
+      LOGICAL                              :: do_bse_w_only = .FALSE.
+      LOGICAL                              :: do_bse_gw_only = .FALSE.
       ! automatic generation of auxiliary basis for LRI-TDDFT
       INTEGER                              :: auto_basis_p_lri_aux = 1
       !> use symmetric definition of ADMM Kernel correction
       LOGICAL                              :: admm_symm = .FALSE.
       !> Use/Ignore possible ADMM Kernel XC correction
       LOGICAL                              :: admm_xc_correction = .FALSE.
+      ! Compute exciton descriptors
+      LOGICAL                              :: do_exciton_descriptors = .FALSE.
+      LOGICAL                              :: do_directional_exciton_descriptors = .FALSE.
       !
       ! DIPOLE_MOMENTS subsection
       !
@@ -545,7 +717,23 @@ MODULE cp_control_types
       !> manually provided the list of cutoff values for each grid level
       !> (when it is null(), the cutoff values will be assigned automatically)
       REAL(kind=dp), DIMENSION(:), POINTER :: mgrid_e_cutoff => NULL()
+      !> Parameter for smeared occupation TDA
+      TYPE(smeared_type), DIMENSION(:), POINTER :: smeared_occup => NULL()
    END TYPE tddfpt2_control_type
+
+! **************************************************************************************************
+!> \brief
+! **************************************************************************************************
+   TYPE rixs_control_type
+
+      LOGICAL                              :: enabled = .FALSE.
+      INTEGER                              :: core_states = 0
+      INTEGER                              :: valence_states = 0
+
+      TYPE(tddfpt2_control_type), POINTER     :: tddfpt2_control => NULL()
+      TYPE(xas_tdp_control_type), POINTER     :: xas_tdp_control => NULL()
+
+   END TYPE rixs_control_type
 
 ! **************************************************************************************************
 ! \brief Control parameters for a DFT calculation
@@ -558,13 +746,18 @@ MODULE cp_control_types
       TYPE(qs_control_type), POINTER       :: qs_control => NULL()
       TYPE(rtp_control_type), POINTER      :: rtp_control => NULL()
       TYPE(sccs_control_type), POINTER     :: sccs_control => NULL()
-      TYPE(tddfpt_control_type), POINTER   :: tddfpt_control => NULL()
       TYPE(tddfpt2_control_type), POINTER  :: tddfpt2_control => NULL()
+      TYPE(rixs_control_type), POINTER     :: rixs_control => NULL()
       TYPE(xas_control_type), POINTER      :: xas_control => NULL()
       TYPE(expot_control_type), POINTER    :: expot_control => NULL()
       TYPE(maxwell_control_type), POINTER  :: maxwell_control => NULL()
+      TYPE(smeagol_control_type), POINTER  :: smeagol_control => NULL()
+      TYPE(paep_control_type), POINTER     :: paep_control => NULL()
+      TYPE(pcc_control_type), POINTER      :: pcc_control => NULL()
       TYPE(efield_p_type), POINTER, &
          DIMENSION(:)                      :: efield_fields => NULL()
+      TYPE(hairy_probes_type), POINTER, &
+         DIMENSION(:)                      :: probe => NULL()
       INTEGER                              :: nspins = 0, &
                                               charge = 0, &
                                               multiplicity = 0, &
@@ -579,13 +772,13 @@ MODULE cp_control_types
                                               auto_basis_p_lri_aux = 1, &
                                               auto_basis_ri_hxc = 1, &
                                               auto_basis_ri_xas = 1, &
-                                              auto_basis_ri_hfx = 1
+                                              auto_basis_ri_hfx = 1, &
+                                              localize_each = 1
       REAL(KIND=dp)                        :: relax_multiplicity = 0.0_dp, &
                                               sic_scaling_a = 0.0_dp, &
                                               sic_scaling_b = 0.0_dp, &
                                               pos_dir_surf_dip = 0.0_dp
-      LOGICAL                              :: do_tddfpt_calculation = .FALSE., &
-                                              do_xas_calculation = .FALSE., &
+      LOGICAL                              :: do_xas_calculation = .FALSE., &
                                               do_xas_tdp_calculation = .FALSE., &
                                               drho_by_collocation = .FALSE., &
                                               use_kinetic_energy_density = .FALSE., &
@@ -615,7 +808,12 @@ MODULE cp_control_types
                                               correct_el_density_dip = .FALSE., &
                                               do_sccs = .FALSE., &
                                               apply_embed_pot = .FALSE., &
-                                              apply_dmfet_pot = .FALSE.
+                                              apply_dmfet_pot = .FALSE., &
+                                              hairy_probes = .FALSE., &
+                                              do_paep = .FALSE., &
+                                              do_pcc = .FALSE., &
+                                              ! If true, then no other XC functionals are allowed
+                                              use_gauxc = .FALSE.
    END TYPE dft_control_type
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_control_types'
@@ -625,14 +823,15 @@ MODULE cp_control_types
    PUBLIC :: dft_control_type, &
              qs_control_type, &
              gapw_control_type, &
-             tddfpt_control_type, &
              tddfpt2_control_type, &
+             rixs_control_type, &
              proj_mo_type, &
              efield_type, &
              mulliken_restraint_type, &
              ddapc_restraint_type, &
              dftb_control_type, &
              xtb_control_type, &
+             xtb_reference_cli_type, &
              semi_empirical_control_type, &
              s2_restraint_type, &
              admm_control_type, &
@@ -640,18 +839,23 @@ MODULE cp_control_types
              expot_control_type, &
              rtp_control_type, &
              sccs_control_type, &
-             stda_control_type
+             stda_control_type, &
+             smeared_type, &
+             hairy_probes_type, &
+             paep_control_type, &
+             pcc_control_type
 
    ! Public subroutines
 
    PUBLIC :: dft_control_release, &
              dft_control_create, &
-             tddfpt_control_create, &
              admm_control_create, &
              admm_control_release, &
              maxwell_control_create, &
              expot_control_create, &
-             ddapc_control_create
+             ddapc_control_create, &
+             rixs_control_create, &
+             rixs_control_release
 
 CONTAINS
 
@@ -764,20 +968,29 @@ CONTAINS
 
       NULLIFY (dft_control%xas_control)
       NULLIFY (dft_control%qs_control)
-      NULLIFY (dft_control%tddfpt_control)
       NULLIFY (dft_control%tddfpt2_control)
+      NULLIFY (dft_control%rixs_control)
       NULLIFY (dft_control%efield_fields)
       NULLIFY (dft_control%period_efield)
       NULLIFY (dft_control%admm_control)
       NULLIFY (dft_control%expot_control)
       NULLIFY (dft_control%maxwell_control)
+      NULLIFY (dft_control%smeagol_control)
       NULLIFY (dft_control%rtp_control)
       NULLIFY (dft_control%sccs_control)
+      NULLIFY (dft_control%probe)
+      NULLIFY (dft_control%paep_control)
+      NULLIFY (dft_control%pcc_control)
       dft_control%do_sccs = .FALSE.
       dft_control%apply_embed_pot = .FALSE.
       dft_control%apply_dmfet_pot = .FALSE.
+      dft_control%hairy_probes = .FALSE.
+      dft_control%do_pcc = .FALSE.
+      dft_control%do_paep = .FALSE.
       CALL qs_control_create(dft_control%qs_control)
       CALL tddfpt2_control_create(dft_control%tddfpt2_control)
+      CALL rixs_control_create(dft_control%rixs_control)
+      CALL smeagol_control_create(dft_control%smeagol_control)
    END SUBROUTINE dft_control_create
 
 ! **************************************************************************************************
@@ -790,9 +1003,11 @@ CONTAINS
    SUBROUTINE dft_control_release(dft_control)
       TYPE(dft_control_type), INTENT(INOUT)              :: dft_control
 
+      INTEGER                                            :: i
+
       CALL qs_control_release(dft_control%qs_control)
-      CALL tddfpt_control_release(dft_control%tddfpt_control)
       CALL tddfpt2_control_release(dft_control%tddfpt2_control)
+      CALL rixs_control_release(dft_control%rixs_control) ! maybe check first if allocated
       IF (ASSOCIATED(dft_control%xas_control)) THEN
          CALL xas_control_release(dft_control%xas_control)
          DEALLOCATE (dft_control%xas_control)
@@ -800,7 +1015,14 @@ CONTAINS
       CALL admm_control_release(dft_control%admm_control)
       CALL expot_control_release(dft_control%expot_control)
       CALL maxwell_control_release(dft_control%maxwell_control)
+      CALL smeagol_control_release(dft_control%smeagol_control)
       CALL efield_fields_release(dft_control%efield_fields)
+      IF (ASSOCIATED(dft_control%probe)) THEN
+         DO i = 1, SIZE(dft_control%probe)
+            DEALLOCATE (dft_control%probe(i)%atom_ids)
+         END DO
+         DEALLOCATE (dft_control%probe)
+      END IF
       IF (ASSOCIATED(dft_control%sccs_control)) DEALLOCATE (dft_control%sccs_control)
       IF (ASSOCIATED(dft_control%period_efield)) THEN
          DEALLOCATE (dft_control%period_efield)
@@ -809,6 +1031,8 @@ CONTAINS
          CALL proj_mo_list_release(dft_control%rtp_control%proj_mo_list)
          DEALLOCATE (dft_control%rtp_control)
       END IF
+      IF (ASSOCIATED(dft_control%pcc_control)) DEALLOCATE (dft_control%pcc_control)
+      IF (ASSOCIATED(dft_control%paep_control)) DEALLOCATE (dft_control%paep_control)
 
    END SUBROUTINE dft_control_release
 
@@ -871,6 +1095,9 @@ CONTAINS
             DEALLOCATE (qs_control%e_cutoff)
          END IF
          IF (ASSOCIATED(qs_control%gapw_control)) THEN
+            IF (ASSOCIATED(qs_control%gapw_control%aw)) THEN
+               DEALLOCATE (qs_control%gapw_control%aw)
+            END IF
             DEALLOCATE (qs_control%gapw_control)
          END IF
          IF (ASSOCIATED(qs_control%ddapc_restraint_control)) THEN
@@ -882,36 +1109,6 @@ CONTAINS
          DEALLOCATE (qs_control)
       END IF
    END SUBROUTINE qs_control_release
-
-! **************************************************************************************************
-!> \brief ...
-!> \param tddfpt_control ...
-! **************************************************************************************************
-   SUBROUTINE tddfpt_control_create(tddfpt_control)
-      TYPE(tddfpt_control_type), POINTER                 :: tddfpt_control
-
-      CPASSERT(.NOT. ASSOCIATED(tddfpt_control))
-      ALLOCATE (tddfpt_control)
-      NULLIFY (tddfpt_control%lumos)
-      NULLIFY (tddfpt_control%lumos_eigenvalues)
-
-   END SUBROUTINE tddfpt_control_create
-
-! **************************************************************************************************
-!> \brief ...
-!> \param tddfpt_control ...
-! **************************************************************************************************
-   SUBROUTINE tddfpt_control_release(tddfpt_control)
-      TYPE(tddfpt_control_type), POINTER                 :: tddfpt_control
-
-      IF (ASSOCIATED(tddfpt_control)) THEN
-         CALL cp_fm_release(tddfpt_control%lumos)
-         IF (ASSOCIATED(tddfpt_control%lumos_eigenvalues)) THEN
-            DEALLOCATE (tddfpt_control%lumos_eigenvalues)
-         END IF
-         DEALLOCATE (tddfpt_control)
-      END IF
-   END SUBROUTINE tddfpt_control_release
 
 ! **************************************************************************************************
 !> \brief allocate control options for Time-Dependent Density Functional Theory calculation
@@ -958,6 +1155,39 @@ CONTAINS
    END SUBROUTINE tddfpt2_control_release
 
 ! **************************************************************************************************
+!> \brief Creates and initializes the rixs_control_type
+!> \param rixs_control the type to initialize
+! **************************************************************************************************
+   SUBROUTINE rixs_control_create(rixs_control)
+      TYPE(rixs_control_type), POINTER                   :: rixs_control
+
+      CPASSERT(.NOT. ASSOCIATED(rixs_control))
+      ALLOCATE (rixs_control)
+
+      NULLIFY (rixs_control%tddfpt2_control)
+      CALL tddfpt2_control_create(rixs_control%tddfpt2_control)
+      NULLIFY (rixs_control%xas_tdp_control)
+      CALL xas_tdp_control_create(rixs_control%xas_tdp_control)
+
+   END SUBROUTINE rixs_control_create
+
+! **************************************************************************************************
+!> \brief Releases the rixs_control_type
+!> \param rixs_control ...
+! **************************************************************************************************
+   SUBROUTINE rixs_control_release(rixs_control)
+      TYPE(rixs_control_type), POINTER                   :: rixs_control
+
+      IF (ASSOCIATED(rixs_control)) THEN
+         CALL tddfpt2_control_release(rixs_control%tddfpt2_control)
+         CALL xas_tdp_control_release(rixs_control%xas_tdp_control)
+
+         DEALLOCATE (rixs_control)
+      END IF
+
+   END SUBROUTINE rixs_control_release
+
+! **************************************************************************************************
 !> \brief ...
 !> \param proj_mo_list ...
 ! **************************************************************************************************
@@ -979,6 +1209,8 @@ CONTAINS
                END IF
                IF (ALLOCATED(proj_mo_list(i)%proj_mo%td_mo_index)) &
                   DEALLOCATE (proj_mo_list(i)%proj_mo%td_mo_index)
+               IF (ALLOCATED(proj_mo_list(i)%proj_mo%td_mo_occ)) &
+                  DEALLOCATE (proj_mo_list(i)%proj_mo%td_mo_occ)
                DEALLOCATE (proj_mo_list(i)%proj_mo)
             END IF
          END DO
@@ -1055,6 +1287,7 @@ CONTAINS
       NULLIFY (xtb_control%kab_vals)
       NULLIFY (xtb_control%kab_types)
       NULLIFY (xtb_control%nonbonded)
+      NULLIFY (xtb_control%rcpair)
 
    END SUBROUTINE xtb_control_create
 
@@ -1074,6 +1307,9 @@ CONTAINS
          END IF
          IF (ASSOCIATED(xtb_control%kab_types)) THEN
             DEALLOCATE (xtb_control%kab_types)
+         END IF
+         IF (ASSOCIATED(xtb_control%rcpair)) THEN
+            DEALLOCATE (xtb_control%rcpair)
          END IF
          IF (ASSOCIATED(xtb_control%nonbonded)) THEN
             CALL pair_potential_p_release(xtb_control%nonbonded)

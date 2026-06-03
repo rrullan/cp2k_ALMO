@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,12 +17,8 @@
 ! **************************************************************************************************
 MODULE cp_blacs_types
 
-#if defined(__DLAF)
-   USE cp_dlaf_utils_api, ONLY: cp_dlaf_create_grid, &
-                                cp_dlaf_free_grid
-#endif
-   USE kinds, ONLY: dp
-   USE message_passing, ONLY: mp_comm_type
+   USE kinds,                           ONLY: dp
+   USE message_passing,                 ONLY: mp_comm_type
 #include "../base/base_uses.f90"
 
    IMPLICIT NONE
@@ -33,7 +29,7 @@ MODULE cp_blacs_types
 
    TYPE cp_blacs_type
       PRIVATE
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER :: context_handle = -1
 #endif
       INTEGER, DIMENSION(2), PUBLIC :: mepos = -1, num_pe = -1
@@ -55,7 +51,7 @@ MODULE cp_blacs_types
       GENERIC, PUBLIC :: OPERATOR(/=) => cp_context_is_not_equal
 
       PROCEDURE, PUBLIC, PASS(this), NON_OVERRIDABLE :: interconnect => cp_blacs_interconnect
-   END TYPE
+   END TYPE cp_blacs_type
 
 !***
 CONTAINS
@@ -73,15 +69,11 @@ CONTAINS
       CLASS(mp_comm_type), INTENT(IN) :: comm
       CHARACTER(len=1), INTENT(IN):: order
       INTEGER, INTENT(IN)    :: nprow, npcol
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER :: context_handle
       context_handle = comm%get_handle()
       CALL blacs_gridinit(context_handle, order, nprow, npcol)
       this%context_handle = context_handle
-
-#if defined(__DLAF)
-      CALL cp_dlaf_create_grid(context_handle)
-#endif
 #else
       MARK_USED(this)
       MARK_USED(comm)
@@ -98,12 +90,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE cp_blacs_gridexit(this)
       CLASS(cp_blacs_type), INTENT(IN) :: this
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL blacs_gridexit(this%context_handle)
-
-#if defined(__DLAF)
-      CALL cp_dlaf_free_grid(this%context_handle)
-#endif
 #else
       MARK_USED(this)
 #endif
@@ -115,7 +103,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE cp_blacs_gridinfo(this)
       CLASS(cp_blacs_type), INTENT(INOUT)  :: this
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL blacs_gridinfo(this%context_handle, this%num_pe(1), this%num_pe(2), this%mepos(1), this%mepos(2))
 #else
       MARK_USED(this)
@@ -140,7 +128,7 @@ CONTAINS
    SUBROUTINE cp_blacs_set(this, what, val)
       CLASS(cp_blacs_type), INTENT(IN) :: this
       INTEGER, INTENT(IN)  :: what, val
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL blacs_set(this%context_handle, what, val)
 #else
       MARK_USED(this)
@@ -164,7 +152,7 @@ CONTAINS
       CHARACTER(len=1), INTENT(IN) :: SCOPE, TOP
       INTEGER, INTENT(IN)     :: M, N, LDA
       COMPLEX(KIND=dp)            :: A
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL zgebs2d(this%context_handle, SCOPE, TOP, M, N, A, LDA)
 #else
       MARK_USED(this)
@@ -175,7 +163,7 @@ CONTAINS
       MARK_USED(A)
       MARK_USED(LDA)
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_blacs_zgebs2d
 ! **************************************************************************************************
 !> \brief ...
 !> \param this ...
@@ -194,7 +182,7 @@ CONTAINS
       INTEGER, INTENT(IN)     :: M, N, LDA
       INTEGER, INTENT(IN)     :: RSRC, CSRC
       COMPLEX(KIND=dp)            :: A
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL zgebr2d(this%context_handle, SCOPE, TOP, M, N, A, LDA, RSRC, CSRC)
 #else
       MARK_USED(this)
@@ -207,7 +195,7 @@ CONTAINS
       MARK_USED(RSRC)
       MARK_USED(CSRC)
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_blacs_zgebr2d
 
 ! **************************************************************************************************
 !> \brief ...
@@ -224,7 +212,7 @@ CONTAINS
       CHARACTER(len=1), INTENT(IN) :: SCOPE, TOP
       INTEGER, INTENT(IN)     :: M, N, LDA
       REAL(KIND=dp)               :: A
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL dgebs2d(this%context_handle, SCOPE, TOP, M, N, A, LDA)
 #else
       MARK_USED(this)
@@ -235,7 +223,7 @@ CONTAINS
       MARK_USED(A)
       MARK_USED(LDA)
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_blacs_dgebs2d
 ! **************************************************************************************************
 !> \brief ...
 !> \param this ...
@@ -254,7 +242,7 @@ CONTAINS
       INTEGER, INTENT(IN)     :: M, N, LDA
       INTEGER, INTENT(IN)     :: RSRC, CSRC
       REAL(KIND=dp)               :: A
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       CALL dgebr2d(this%context_handle, SCOPE, TOP, M, N, A, LDA, RSRC, CSRC)
 #else
       MARK_USED(this)
@@ -267,7 +255,7 @@ CONTAINS
       MARK_USED(RSRC)
       MARK_USED(CSRC)
 #endif
-   END SUBROUTINE
+   END SUBROUTINE cp_blacs_dgebr2d
 
 ! **************************************************************************************************
 !> \brief ...
@@ -276,13 +264,13 @@ CONTAINS
 ! **************************************************************************************************
    ELEMENTAL INTEGER FUNCTION cp_blacs_get_handle(this)
       CLASS(cp_blacs_type), INTENT(IN) :: this
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       cp_blacs_get_handle = this%context_handle
 #else
       MARK_USED(this)
       cp_blacs_get_handle = -1
 #endif
-   END FUNCTION
+   END FUNCTION cp_blacs_get_handle
 
 ! **************************************************************************************************
 !> \brief ...
@@ -292,7 +280,7 @@ CONTAINS
 ! **************************************************************************************************
    ELEMENTAL LOGICAL FUNCTION cp_context_is_equal(this, other)
       CLASS(cp_blacs_type), INTENT(IN) :: this, other
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       cp_context_is_equal = (this%context_handle == other%context_handle)
 #else
       MARK_USED(this)
@@ -309,7 +297,7 @@ CONTAINS
 ! **************************************************************************************************
    ELEMENTAL LOGICAL FUNCTION cp_context_is_not_equal(this, other)
       CLASS(cp_blacs_type), INTENT(IN) :: this, other
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       cp_context_is_not_equal = (this%context_handle /= other%context_handle)
 #else
       MARK_USED(this)

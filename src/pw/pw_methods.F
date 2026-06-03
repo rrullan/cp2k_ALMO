@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -33,7 +33,8 @@ MODULE pw_methods
                         accurate_sum
    USE kinds, ONLY: dp
    USE machine, ONLY: m_memory
-   USE mathconstants, ONLY: z_zero
+   USE mathconstants, ONLY: gaussi, &
+                            z_zero
    USE pw_copy_all, ONLY: pw_copy_match
    USE pw_fpga, ONLY: pw_fpga_c1dr3d_3d_dp, &
                       pw_fpga_c1dr3d_3d_sp, &
@@ -246,9 +247,13 @@ CONTAINS
 
             CALL timeset(routineN, handle)
 
+#if !defined(__INTEL_LLVM_COMPILER) || (20250000 <= __INTEL_LLVM_COMPILER)
 !$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw)
             pw%array = ${type2type("0.0_dp", "r3d", kind)}$
 !$OMP END PARALLEL WORKSHARE
+#else
+            pw%array = ${type2type("0.0_dp", "r3d", kind)}$
+#endif
 
             CALL timestop(handle)
 
@@ -424,8 +429,8 @@ CONTAINS
                        ngpts => SIZE(pw%pw_grid%gsq), ghat => pw%pw_grid%g_hat, yzq => pw%pw_grid%para%yzq)
 
                IF (PRESENT(scale)) THEN
-!$OMP PARALLEL DO DEFAULT(NONE), &
-!$OMP             PRIVATE(l, m, mn, n), &
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(l, m, mn, n) &
 !$OMP             SHARED(c, pw, scale)
                   DO gpt = 1, ngpts
                      l = mapl(ghat(1, gpt)) + 1
@@ -436,8 +441,8 @@ CONTAINS
                   END DO
 !$OMP END PARALLEL DO
                ELSE
-!$OMP PARALLEL DO DEFAULT(NONE), &
-!$OMP             PRIVATE(l, m, mn, n), &
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(l, m, mn, n) &
 !$OMP             SHARED(c, pw)
                   DO gpt = 1, ngpts
                      l = mapl(ghat(1, gpt)) + 1
@@ -482,8 +487,8 @@ CONTAINS
                IF (.NOT. PRESENT(scale)) c = z_zero
 
                IF (PRESENT(scale)) THEN
-!$OMP PARALLEL DO DEFAULT(NONE), &
-!$OMP             PRIVATE(l, m, mn, n), &
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(l, m, mn, n) &
 !$OMP             SHARED(c, pw, scale)
                   DO gpt = 1, ngpts
                      l = mapl(ghat(1, gpt)) + 1
@@ -494,8 +499,8 @@ CONTAINS
                   END DO
 !$OMP END PARALLEL DO
                ELSE
-!$OMP PARALLEL DO DEFAULT(NONE), &
-!$OMP             PRIVATE(l, m, mn, n), &
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(l, m, mn, n) &
 !$OMP             SHARED(c, pw)
                   DO gpt = 1, ngpts
                      l = mapl(ghat(1, gpt)) + 1
@@ -515,8 +520,8 @@ CONTAINS
                           ghat => pw%pw_grid%g_hat, ngpts => SIZE(pw%pw_grid%gsq), yzq => pw%pw_grid%para%yzq)
 
                   IF (PRESENT(scale)) THEN
-!$OMP PARALLEL DO DEFAULT(NONE), &
-!$OMP             PRIVATE(l, m, mn, n), &
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(l, m, mn, n) &
 !$OMP             SHARED(c, pw, scale)
                      DO gpt = 1, ngpts
                         l = mapl(ghat(1, gpt)) + 1
@@ -527,7 +532,7 @@ CONTAINS
                      END DO
 !$OMP END PARALLEL DO
                   ELSE
-!$OMP PARALLEL DO DEFAULT(NONE), &
+!$OMP PARALLEL DO DEFAULT(NONE) &
 !$OMP             PRIVATE(l, m, mn, n) &
 !$OMP             SHARED(c, pw)
                      DO gpt = 1, ngpts
@@ -609,7 +614,9 @@ CONTAINS
 
                      IF ((pw1%pw_grid%id_nr == pw2%pw_grid%reference)) THEN
                         IF (ng1 >= ng2) THEN
-!$OMP PARALLEL DO PRIVATE(i,j) DEFAULT(NONE) SHARED(ng2, pw1, pw2)
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(i,j) &
+!$OMP             SHARED(ng2, pw1, pw2)
                            DO i = 1, ng2
                               j = pw2%pw_grid%gidx(i)
                               pw2%array(i) = ${type2type("pw1%array(j)", kind, kind2)}$
@@ -617,7 +624,9 @@ CONTAINS
 !$OMP END PARALLEL DO
                         ELSE
                            CALL pw_zero(pw2)
-!$OMP PARALLEL DO PRIVATE(i,j) DEFAULT(NONE) SHARED(ng1, pw1, pw2)
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(i,j) &
+!$OMP             SHARED(ng1, pw1, pw2)
                            DO i = 1, ng1
                               j = pw2%pw_grid%gidx(i)
                               pw2%array(j) = ${type2type("pw1%array(i)", kind, kind2)}$
@@ -944,6 +953,7 @@ CONTAINS
                      IF (.NOT. ASSOCIATED(pw_out%pw_grid, pw1%pw_grid) .OR. .NOT. ASSOCIATED(pw_out%pw_grid, pw2%pw_grid)) &
                         CPABORT("pw_multiply not implemented for non-identical grids!")
 
+#if !defined(__INTEL_LLVM_COMPILER) || (20250000 <= __INTEL_LLVM_COMPILER)
                      IF (my_alpha == 1.0_dp) THEN
 !$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw_out, pw1, pw2)
                         pw_out%array = pw_out%array + pw1%array*${type2type("pw2%array", kind2, kind)}$
@@ -953,6 +963,13 @@ CONTAINS
                         pw_out%array = pw_out%array + my_alpha*pw1%array*${type2type("pw2%array", kind2, kind)}$
 !$OMP END PARALLEL WORKSHARE
                      END IF
+#else
+                     IF (my_alpha == 1.0_dp) THEN
+                        pw_out%array = pw_out%array + pw1%array*${type2type("pw2%array", kind2, kind)}$
+                     ELSE
+                        pw_out%array = pw_out%array + my_alpha*pw1%array*${type2type("pw2%array", kind2, kind)}$
+                     END IF
+#endif
 
                      CALL timestop(handle)
 
@@ -1005,7 +1022,7 @@ CONTAINS
                      LOGICAL, INTENT(IN), OPTIONAL                      :: just_sum, local_only
                      REAL(KIND=dp)                                      :: integral_value
 
-                     CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_integral_ab'
+                     CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_integral_ab_${kind}$_${kind2}$_${space}$'
 
                      INTEGER                                            :: handle, loc_sumtype
                      LOGICAL                                            :: my_just_sum, my_local_only
@@ -1053,8 +1070,7 @@ CONTAINS
                         #:elif kind2[0]=="r"
                            integral_value = accurate_sum(REAL(pw1%array, KIND=dp)*pw2%array) !? complex bit
                         #:else
-                           integral_value = accurate_sum(REAL(CONJG(pw1%array) &
-                                                              *pw2%array, KIND=dp)) !? complex bit
+                           integral_value = accurate_sum(REAL(CONJG(pw1%array)*pw2%array, KIND=dp))
                         #:endif
 
                      END IF
@@ -1177,7 +1193,6 @@ CONTAINS
                                  #:endif
                                  INTEGER, DIMENSION(:), POINTER                     :: n
                                  LOGICAL                                            :: test
-                                 REAL(KIND=dp)                                      :: norm
 
                                  CALL timeset(routineN, handle2)
                                  out_unit = cp_logger_get_default_io_unit()
@@ -1203,15 +1218,6 @@ CONTAINS
                                     END IF
                                  END IF
 
-                                 !..prepare input
-                                 #:if space == "rs"
-                                    norm = 1.0_dp/pw1%pw_grid%ngpts
-                                 #:elif space == "gs"
-                                    norm = 1.0_dp
-                                 #:else
-                                    #:stop "Unknown space tag: "+space
-                                 #:endif
-
                                  n => pw1%pw_grid%npts
 
                                  IF (pw1%pw_grid%para%mode == PW_MODE_LOCAL) THEN
@@ -1231,30 +1237,29 @@ CONTAINS
                                           WRITE (out_unit, '(A,T66,A)') "  in space ", "RECIPROCALSPACE"
                                           WRITE (out_unit, '(A,T66,A)') "  out space ", "RECIPROCALSPACE"
                                        #:endif
-                                       WRITE (out_unit, '(A,T66,E15.6)') "  scale factor", norm
                                     END IF
 
                                     #:if space=="rs"
                                        #:if kind==kind2=="c3d"
                                           c_in => pw1%array
                                           c_out => pw2%array
-                                          CALL fft3d(FWFFT, n, c_in, c_out, scale=norm, debug=test)
+                                          CALL fft3d(FWFFT, n, c_in, c_out, debug=test)
                                        #:elif kind=="r3d" and kind2=="c3d"
                                           pw2%array = CMPLX(pw1%array, 0.0_dp, KIND=dp)
                                           c_out => pw2%array
-                                          CALL fft3d(FWFFT, n, c_out, scale=norm, debug=test)
+                                          CALL fft3d(FWFFT, n, c_out, debug=test)
                                        #:elif kind=="c3d" and kind2=="c1d"
                                           c_in => pw1%array
                                           ALLOCATE (c_out(n(1), n(2), n(3)))
                                           ! transform
-                                          CALL fft3d(FWFFT, n, c_in, c_out, scale=norm, debug=test)
+                                          CALL fft3d(FWFFT, n, c_in, c_out, debug=test)
                                           ! gather results
                                           IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  PW_GATHER : 3d -> 1d "
                                           CALL pw_gather_s_${kind2}$_c3d(pw2, c_out)
                                           DEALLOCATE (c_out)
                                        #:elif kind=="r3d" and kind2=="c1d"
 #if defined(__OFFLOAD) && !defined(__NO_OFFLOAD_PW)
-                                          CALL pw_gpu_r3dc1d_3d(pw1, pw2, scale=norm)
+                                          CALL pw_gpu_r3dc1d_3d(pw1, pw2)
 #elif defined (__PW_FPGA)
                                           ALLOCATE (c_out(n(1), n(2), n(3)))
                                           ! check if bitstream for the fft size is present
@@ -1266,11 +1271,11 @@ CONTAINS
 #else
                                              CALL pw_fpga_r3dc1d_3d_dp(n, c_out)
 #endif
-                                             CALL zdscal(n(1)*n(2)*n(3), norm, c_out, 1)
+                                             CALL zdscal(n(1)*n(2)*n(3), 1.0_dp/pw1%pw_grid%ngpts, c_out, 1)
                                              CALL pw_gather_s_${kind2}$_c3d(pw2, c_out)
                                           ELSE
                                              CALL pw_copy_to_array(pw1, c_out)
-                                             CALL fft3d(FWFFT, n, c_out, scale=norm, debug=test)
+                                             CALL fft3d(FWFFT, n, c_out, debug=test)
                                              CALL pw_gather_s_${kind2}$_c3d(pw2, c_out)
                                           END IF
                                           DEALLOCATE (c_out)
@@ -1278,7 +1283,7 @@ CONTAINS
                                           ALLOCATE (c_out(n(1), n(2), n(3)))
                                           c_out = 0.0_dp
                                           CALL pw_copy_to_array(pw1, c_out)
-                                          CALL fft3d(FWFFT, n, c_out, scale=norm, debug=test)
+                                          CALL fft3d(FWFFT, n, c_out, debug=test)
                                           CALL pw_gather_s_${kind2}$_c3d(pw2, c_out)
                                           DEALLOCATE (c_out)
 #endif
@@ -1287,11 +1292,11 @@ CONTAINS
                                        #:if kind=="c3d" and kind2=="c3d"
                                           c_in => pw1%array
                                           c_out => pw2%array
-                                          CALL fft3d(BWFFT, n, c_in, c_out, scale=norm, debug=test)
+                                          CALL fft3d(BWFFT, n, c_in, c_out, debug=test)
                                        #:elif kind=="c3d" and kind2=="r3d"
                                           c_in => pw1%array
                                           ALLOCATE (c_out(n(1), n(2), n(3)))
-                                          CALL fft3d(BWFFT, n, c_in, c_out, scale=norm, debug=test)
+                                          CALL fft3d(BWFFT, n, c_in, c_out, debug=test)
                                           ! use real part only
                                           IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  REAL part "
                                           pw2%array = REAL(c_out, KIND=dp)
@@ -1300,10 +1305,10 @@ CONTAINS
                                           c_out => pw2%array
                                           IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  PW_SCATTER : 3d -> 1d "
                                           CALL pw_scatter_s_${kind}$_c3d(pw1, c_out)
-                                          CALL fft3d(BWFFT, n, c_out, scale=norm, debug=test)
+                                          CALL fft3d(BWFFT, n, c_out, debug=test)
                                        #:elif kind=="c1d" and kind2=="r3d"
 #if defined(__OFFLOAD) && !defined(__NO_OFFLOAD_PW)
-                                          CALL pw_gpu_c1dr3d_3d(pw1, pw2, scale=norm)
+                                          CALL pw_gpu_c1dr3d_3d(pw1, pw2)
 #elif defined (__PW_FPGA)
                                           ALLOCATE (c_out(n(1), n(2), n(3)))
                                           ! check if bitstream for the fft size is present
@@ -1316,14 +1321,14 @@ CONTAINS
 #else
                                              CALL pw_fpga_c1dr3d_3d_dp(n, c_out)
 #endif
-                                             CALL zdscal(n(1)*n(2)*n(3), norm, c_out, 1)
+                                             CALL zdscal(n(1)*n(2)*n(3), 1.0_dp, c_out, 1)
                                              ! use real part only
                                              CALL pw_copy_from_array(pw2, c_out)
                                           ELSE
                                              IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  PW_SCATTER : 3d -> 1d "
                                              CALL pw_scatter_s_${kind}$_c3d(pw1, c_out)
                                              ! transform
-                                             CALL fft3d(BWFFT, n, c_out, scale=norm, debug=test)
+                                             CALL fft3d(BWFFT, n, c_out, debug=test)
                                              ! use real part only
                                              IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  REAL part "
                                              CALL pw_copy_from_array(pw2, c_out)
@@ -1334,7 +1339,7 @@ CONTAINS
                                           IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  PW_SCATTER : 3d -> 1d "
                                           CALL pw_scatter_s_${kind}$_c3d(pw1, c_out)
                                           ! transform
-                                          CALL fft3d(BWFFT, n, c_out, scale=norm, debug=test)
+                                          CALL fft3d(BWFFT, n, c_out, debug=test)
                                           ! use real part only
                                           IF (test .AND. out_unit > 0) WRITE (out_unit, '(A)') "  REAL part "
                                           CALL pw_copy_from_array(pw2, c_out)
@@ -1351,7 +1356,7 @@ CONTAINS
                                     !..parallel FFT
                                     !
 
-                                    IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) THEN
+                                    IF (test .AND. out_unit > 0) THEN
                                        WRITE (out_unit, '(A)') " FFT Protocol "
                                        #:if space=="rs"
                                           WRITE (out_unit, '(A,T76,A)') "  Transform direction ", "FWFFT"
@@ -1362,10 +1367,9 @@ CONTAINS
                                           WRITE (out_unit, '(A,T66,A)') "  in space ", "RECIPROCALSPACE"
                                           WRITE (out_unit, '(A,T66,A)') "  out space ", "RECIPROCALSPACE"
                                        #:endif
-                                       WRITE (out_unit, '(A,T66,E15.6)') "  scale factor", norm
                                     END IF
 
-                                    my_pos = pw1%pw_grid%para%my_pos
+                                    my_pos = pw1%pw_grid%para%group%mepos
                                     nrays = pw1%pw_grid%para%nyzray(my_pos)
                                     grays => pw1%pw_grid%grays
 
@@ -1377,15 +1381,14 @@ CONTAINS
                                           !..transform
                                           IF (pw1%pw_grid%para%ray_distribution) THEN
                                              CALL fft3d(FWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
-                                                        pw1%pw_grid%para%rs_group, &
                                                         pw1%pw_grid%para%yzp, pw1%pw_grid%para%nyzray, &
-                                                        pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                                        pw1%pw_grid%para%bo, debug=test)
                                           ELSE
-                                             CALL fft3d(FWFFT, n, c_in, grays, pw1%pw_grid%para%rs_group, &
-                                                        pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                             CALL fft3d(FWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
+                                                        pw1%pw_grid%para%bo, debug=test)
                                           END IF
                                           !..prepare output
-                                          IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) &
+                                          IF (test .AND. out_unit > 0) &
                                              WRITE (out_unit, '(A)') "  PW_GATHER : 2d -> 1d "
                                           CALL pw_gather_p_${kind2}$ (pw2, grays)
                                        #:elif kind=="r3d" and kind2=="c1d"
@@ -1393,7 +1396,7 @@ CONTAINS
                                           ! (no ray dist. is not efficient in CUDA)
                                           use_pw_gpu = pw1%pw_grid%para%ray_distribution
                                           IF (use_pw_gpu) THEN
-                                             CALL pw_gpu_r3dc1d_3d_ps(pw1, pw2, scale=norm)
+                                             CALL pw_gpu_r3dc1d_3d_ps(pw1, pw2)
                                           ELSE
 #endif
 !..   prepare input
@@ -1404,15 +1407,14 @@ CONTAINS
                                              !..transform
                                              IF (pw1%pw_grid%para%ray_distribution) THEN
                                                 CALL fft3d(FWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
-                                                           pw1%pw_grid%para%rs_group, &
                                                            pw1%pw_grid%para%yzp, pw1%pw_grid%para%nyzray, &
-                                                           pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                                           pw1%pw_grid%para%bo, debug=test)
                                              ELSE
-                                                CALL fft3d(FWFFT, n, c_in, grays, pw1%pw_grid%para%rs_group, &
-                                                           pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                                CALL fft3d(FWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
+                                                           pw1%pw_grid%para%bo, debug=test)
                                              END IF
                                              !..prepare output
-                                             IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) &
+                                             IF (test .AND. out_unit > 0) &
                                                 WRITE (out_unit, '(A)') "  PW_GATHER : 2d -> 1d "
                                              CALL pw_gather_p_${kind2}$ (pw2, grays)
                                              DEALLOCATE (c_in)
@@ -1424,7 +1426,7 @@ CONTAINS
                                     #:else
                                        #:if kind=="c1d" and kind2=="c3d"
                                           !..prepare input
-                                          IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) &
+                                          IF (test .AND. out_unit > 0) &
                                              WRITE (out_unit, '(A)') "  PW_SCATTER : 2d -> 1d "
                                           grays = z_zero
                                           CALL pw_scatter_p_${kind}$ (pw1, grays)
@@ -1432,12 +1434,11 @@ CONTAINS
                                           !..transform
                                           IF (pw1%pw_grid%para%ray_distribution) THEN
                                              CALL fft3d(BWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
-                                                        pw1%pw_grid%para%rs_group, &
                                                         pw1%pw_grid%para%yzp, pw1%pw_grid%para%nyzray, &
-                                                        pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                                        pw1%pw_grid%para%bo, debug=test)
                                           ELSE
-                                             CALL fft3d(BWFFT, n, c_in, grays, pw1%pw_grid%para%rs_group, &
-                                                        pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                             CALL fft3d(BWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
+                                                        pw1%pw_grid%para%bo, debug=test)
                                           END IF
                                           !..prepare output (nothing to do)
                                        #:elif kind=="c1d" and kind2=="r3d"
@@ -1445,11 +1446,11 @@ CONTAINS
                                           ! (no ray dist. is not efficient in CUDA)
                                           use_pw_gpu = pw1%pw_grid%para%ray_distribution
                                           IF (use_pw_gpu) THEN
-                                             CALL pw_gpu_c1dr3d_3d_ps(pw1, pw2, scale=norm)
+                                             CALL pw_gpu_c1dr3d_3d_ps(pw1, pw2)
                                           ELSE
 #endif
 !..   prepare input
-                                             IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) &
+                                             IF (test .AND. out_unit > 0) &
                                                 WRITE (out_unit, '(A)') "  PW_SCATTER : 2d -> 1d "
                                              grays = z_zero
                                              CALL pw_scatter_p_${kind}$ (pw1, grays)
@@ -1458,15 +1459,14 @@ CONTAINS
                                              !..transform
                                              IF (pw1%pw_grid%para%ray_distribution) THEN
                                                 CALL fft3d(BWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
-                                                           pw1%pw_grid%para%rs_group, &
                                                            pw1%pw_grid%para%yzp, pw1%pw_grid%para%nyzray, &
-                                                           pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                                           pw1%pw_grid%para%bo, debug=test)
                                              ELSE
-                                                CALL fft3d(BWFFT, n, c_in, grays, pw1%pw_grid%para%rs_group, &
-                                                           pw1%pw_grid%para%bo, scale=norm, debug=test)
+                                                CALL fft3d(BWFFT, n, c_in, grays, pw1%pw_grid%para%group, &
+                                                           pw1%pw_grid%para%bo, debug=test)
                                              END IF
                                              !..prepare output
-                                             IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) &
+                                             IF (test .AND. out_unit > 0) &
                                                 WRITE (out_unit, '(A)') "  Real part "
                                              CALL pw_copy_from_array(pw2, c_in)
                                              DEALLOCATE (c_in)
@@ -1477,7 +1477,7 @@ CONTAINS
                                     #:endif
                                  END IF
 
-                                 IF (test .AND. pw1%pw_grid%para%group_head .AND. out_unit > 0) THEN
+                                 IF (test .AND. out_unit > 0) THEN
                                     WRITE (out_unit, '(A)') " End of FFT Protocol "
                                  END IF
 
@@ -1683,8 +1683,8 @@ CONTAINS
 
                      CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_gauss_damp'
 
-                     INTEGER                                            :: handle
-                     REAL(KIND=dp)                                      :: omega_2
+                     INTEGER                                            :: handle, i
+                     REAL(KIND=dp)                                      :: omega_2, tmp
 
                      CALL timeset(routineN, handle)
                      CPASSERT(omega >= 0)
@@ -1692,9 +1692,12 @@ CONTAINS
                      omega_2 = omega*omega
                      omega_2 = 0.25_dp/omega_2
 
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw,omega_2)
-                     pw%array = pw%array*EXP(-pw%pw_grid%gsq*omega_2)
-!$OMP END PARALLEL WORKSHARE
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp) SHARED(pw,omega_2)
+                     DO i = 1, SIZE(pw%array)
+                        tmp = EXP(-pw%pw_grid%gsq(i)*omega_2)
+                        pw%array(i) = pw%array(i)*tmp
+                     END DO
+!$OMP END PARALLEL DO
 
                      CALL timestop(handle)
 
@@ -1714,8 +1717,8 @@ CONTAINS
 
                      CHARACTER(len=*), PARAMETER :: routineN = 'pw_log_deriv_gauss'
 
-                     INTEGER                                            :: handle
-                     REAL(KIND=dp)                                      :: omega_2
+                     INTEGER                                            :: handle, i
+                     REAL(KIND=dp)                                      :: omega_2, tmp
 
                      CALL timeset(routineN, handle)
                      CPASSERT(omega >= 0)
@@ -1723,9 +1726,12 @@ CONTAINS
                      omega_2 = omega*omega
                      omega_2 = 0.25_dp/omega_2
 
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw,omega_2)
-                     pw%array = pw%array*(1.0_dp + omega_2*pw%pw_grid%gsq)
-!$OMP END PARALLEL WORKSHARE
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp) SHARED(pw,omega_2)
+                     DO i = 1, SIZE(pw%array)
+                        tmp = 1.0_dp + omega_2*pw%pw_grid%gsq(i)
+                        pw%array(i) = pw%array(i)*tmp
+                     END DO
+!$OMP END PARALLEL DO
 
                      CALL timestop(handle)
                   END SUBROUTINE pw_log_deriv_gauss
@@ -1751,7 +1757,7 @@ CONTAINS
                      CHARACTER(len=*), PARAMETER :: routineN = 'pw_compl_gauss_damp'
 
                      INTEGER                                            :: cnt, handle, i
-                     REAL(KIND=dp)                                      :: omega_2, tmp
+                     REAL(KIND=dp)                                      :: omega_2, tmp, tmp2
 
                      CALL timeset(routineN, handle)
 
@@ -1760,14 +1766,15 @@ CONTAINS
 
                      cnt = SIZE(pw%array)
 
-!$OMP PARALLEL DO PRIVATE(i, tmp) DEFAULT(NONE) SHARED(cnt, pw,omega_2)
+!$OMP PARALLEL DO PRIVATE(i, tmp, tmp2) DEFAULT(NONE) SHARED(cnt, pw,omega_2)
                      DO i = 1, cnt
                         tmp = -omega_2*pw%pw_grid%gsq(i)
                         IF (ABS(tmp) > 1.0E-5_dp) THEN
-                           pw%array(i) = pw%array(i)*(1.0_dp - EXP(tmp))
+                           tmp2 = 1.0_dp - EXP(tmp)
                         ELSE
-                           pw%array(i) = pw%array(i)*(tmp + 0.5_dp*tmp*(tmp + (1.0_dp/3.0_dp)*tmp**2))
+                           tmp2 = tmp + 0.5_dp*tmp*(tmp + (1.0_dp/3.0_dp)*tmp**2)
                         END IF
+                        pw%array(i) = pw%array(i)*tmp2
                      END DO
 !$OMP END PARALLEL DO
 
@@ -1789,23 +1796,24 @@ CONTAINS
                      CHARACTER(len=*), PARAMETER :: routineN = 'pw_log_deriv_compl_gauss'
 
                      INTEGER                                            :: handle, i
-                     REAL(KIND=dp)                                      :: omega_2, tmp
+                     REAL(KIND=dp)                                      :: omega_2, tmp, tmp2
 
                      CALL timeset(routineN, handle)
 
                      omega_2 = omega*omega
                      omega_2 = 0.25_dp/omega_2
 
-!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp) &
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp,tmp2) &
 !$OMP             SHARED(pw,omega_2)
                      DO i = 1, SIZE(pw%array)
                         tmp = omega_2*pw%pw_grid%gsq(i)
                         ! For too small arguments, use the Taylor polynomial to prevent division by zero
                         IF (ABS(tmp) >= 0.003_dp) THEN
-                           pw%array(i) = pw%array(i)*(1.0_dp - tmp*EXP(-tmp)/(1.0_dp - EXP(-tmp)))
+                           tmp2 = 1.0_dp - tmp*EXP(-tmp)/(1.0_dp - EXP(-tmp))
                         ELSE
-                           pw%array(i) = pw%array(i)*(0.5_dp*tmp - tmp**2/12.0_dp)
+                           tmp2 = 0.5_dp*tmp - tmp**2/12.0_dp
                         END IF
+                        pw%array(i) = pw%array(i)*tmp2
                      END DO
 !$OMP END PARALLEL DO
 
@@ -1835,17 +1843,20 @@ CONTAINS
 
                      CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_gauss_damp_mix'
 
-                     INTEGER                                            :: handle
-                     REAL(KIND=dp)                                      :: omega_2
+                     INTEGER                                            :: handle, i
+                     REAL(KIND=dp)                                      :: omega_2, tmp
 
                      CALL timeset(routineN, handle)
 
                      omega_2 = omega*omega
                      omega_2 = 0.25_dp/omega_2
 
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw, omega_2, scale_coul, scale_long)
-                     pw%array = pw%array*(scale_coul + scale_long*EXP(-pw%pw_grid%gsq*omega_2))
-!$OMP END PARALLEL WORKSHARE
+!$OMP PARALLEL DO DEFAULT(NONE) SHARED(pw, omega_2, scale_coul, scale_long) PRIVATE(i,tmp)
+                     DO i = 1, SIZE(pw%array)
+                        tmp = scale_coul + scale_long*EXP(-pw%pw_grid%gsq(i)*omega_2)
+                        pw%array(i) = pw%array(i)*tmp
+                     END DO
+!$OMP END PARALLEL DO
 
                      CALL timestop(handle)
 
@@ -1868,18 +1879,19 @@ CONTAINS
                      CHARACTER(len=*), PARAMETER :: routineN = 'pw_log_deriv_mix_cl'
 
                      INTEGER                                            :: handle, i
-                     REAL(KIND=dp)                                      :: omega_2, tmp
+                     REAL(KIND=dp)                                      :: omega_2, tmp, tmp2
 
                      CALL timeset(routineN, handle)
 
                      omega_2 = omega*omega
                      omega_2 = 0.25_dp/omega_2
 
-!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp) &
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp,tmp2) &
 !$OMP             SHARED(pw,omega_2,scale_long,scale_coul)
                      DO i = 1, SIZE(pw%array)
                         tmp = omega_2*pw%pw_grid%gsq(i)
-                        pw%array(i) = pw%array(i)*(1.0_dp + scale_long*tmp*EXP(-tmp)/(scale_coul + scale_long*EXP(-tmp)))
+                        tmp2 = 1.0_dp + scale_long*tmp*EXP(-tmp)/(scale_coul + scale_long*EXP(-tmp))
+                        pw%array(i) = pw%array(i)*tmp2
                      END DO
 !$OMP END PARALLEL DO
 
@@ -1908,19 +1920,20 @@ CONTAINS
                      CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_truncated'
 
                      INTEGER                                            :: handle, i
-                     REAL(KIND=dp)                                      :: tmp
+                     REAL(KIND=dp)                                      :: tmp, tmp2
 
                      CALL timeset(routineN, handle)
                      CPASSERT(rcutoff >= 0)
 
-!$OMP PARALLEL DO PRIVATE(i,tmp) DEFAULT(NONE) SHARED(pw, rcutoff)
+!$OMP PARALLEL DO PRIVATE(i,tmp,tmp2) DEFAULT(NONE) SHARED(pw, rcutoff)
                      DO i = 1, SIZE(pw%array)
                         tmp = SQRT(pw%pw_grid%gsq(i))*rcutoff
                         IF (tmp >= 0.005_dp) THEN
-                           pw%array(i) = pw%array(i)*(1.0_dp - COS(tmp))
+                           tmp2 = 1.0_dp - COS(tmp)
                         ELSE
-                           pw%array(i) = pw%array(i)*tmp**2/2.0_dp*(1.0 - tmp**2/12.0_dp)
+                           tmp2 = tmp**2/2.0_dp*(1.0 - tmp**2/12.0_dp)
                         END IF
+                        pw%array(i) = pw%array(i)*tmp2
                      END DO
 !$OMP END PARALLEL DO
 
@@ -1943,22 +1956,23 @@ CONTAINS
                      CHARACTER(len=*), PARAMETER :: routineN = 'pw_log_deriv_trunc'
 
                      INTEGER                                            :: handle, i
-                     REAL(KIND=dp)                                      :: rchalf, tmp
+                     REAL(KIND=dp)                                      :: rchalf, tmp, tmp2
 
                      CALL timeset(routineN, handle)
                      CPASSERT(rcutoff >= 0)
 
                      rchalf = 0.5_dp*rcutoff
-!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp) &
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,tmp,tmp2) &
 !$OMP             SHARED(pw,rchalf)
                      DO i = 1, SIZE(pw%array)
                         tmp = rchalf*SQRT(pw%pw_grid%gsq(i))
                         ! For too small arguments, use the Taylor polynomial to prevent division by zero
                         IF (ABS(tmp) >= 0.0001_dp) THEN
-                           pw%array(i) = pw%array(i)*(1.0_dp - tmp/TAN(tmp))
+                           tmp2 = 1.0_dp - tmp/TAN(tmp)
                         ELSE
-                           pw%array(i) = pw%array(i)*tmp**2*(1.0_dp + tmp**2/15.0_dp)/3.0_dp
+                           tmp2 = tmp**2*(1.0_dp + tmp**2/15.0_dp)/3.0_dp
                         END IF
+                        pw%array(i) = pw%array(i)*tmp2
                      END DO
 !$OMP END PARALLEL DO
 
@@ -1984,7 +1998,7 @@ CONTAINS
                      CHARACTER(len=*), PARAMETER                        :: routineN = 'pw_derive'
 
                      COMPLEX(KIND=dp)                                   :: im
-                     INTEGER                                            :: handle, m
+                     INTEGER                                            :: handle, m, idx, idir
 
                      CALL timeset(routineN, handle)
 
@@ -1992,37 +2006,23 @@ CONTAINS
                         CPABORT("Nonnegative exponents are not supported!")
 
                      m = SUM(n)
-                     im = CMPLX(0.0_dp, 1.0_dp, KIND=dp)**m
+                     im = gaussi**m
 
-                     IF (n(1) == 1) THEN
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw)
-                        pw%array(:) = pw%array(:)*pw%pw_grid%g(1, :)
-!$OMP END PARALLEL WORKSHARE
-                     ELSE IF (n(1) > 1) THEN
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(n, pw)
-                        pw%array(:) = pw%array(:)*(pw%pw_grid%g(1, :)**n(1))
-!$OMP END PARALLEL WORKSHARE
-                     END IF
-
-                     IF (n(2) == 1) THEN
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw)
-                        pw%array(:) = pw%array(:)*pw%pw_grid%g(2, :)
-!$OMP END PARALLEL WORKSHARE
-                     ELSE IF (n(2) > 1) THEN
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(n, pw)
-                        pw%array(:) = pw%array(:)*(pw%pw_grid%g(2, :)**n(2))
-!$OMP END PARALLEL WORKSHARE
-                     END IF
-
-                     IF (n(3) == 1) THEN
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(pw)
-                        pw%array(:) = pw%array(:)*pw%pw_grid%g(3, :)
-!$OMP END PARALLEL WORKSHARE
-                     ELSE IF (n(3) > 1) THEN
-!$OMP PARALLEL WORKSHARE DEFAULT(NONE) SHARED(n, pw)
-                        pw%array(:) = pw%array(:)*(pw%pw_grid%g(3, :)**n(3))
-!$OMP END PARALLEL WORKSHARE
-                     END IF
+                     DO idir = 1, 3
+                        IF (n(idir) == 1) THEN
+!$OMP PARALLEL DO DEFAULT(NONE) SHARED(pw,idir) PRIVATE(idx)
+                           DO idx = 1, SIZE(pw%array)
+                              pw%array(idx) = pw%array(idx)*pw%pw_grid%g(idir, idx)
+                           END DO
+!$OMP END PARALLEL DO
+                        ELSE IF (n(idir) > 1) THEN
+!$OMP PARALLEL DO DEFAULT(NONE) SHARED(n, pw,idir) PRIVATE(idx)
+                           DO idx = 1, SIZE(pw%array)
+                              pw%array(idx) = pw%array(idx)*pw%pw_grid%g(idir, idx)**n(idir)
+                           END DO
+!$OMP END PARALLEL DO
+                        END IF
+                     END DO
 
                      ! im can take the values 1, -1, i, -i
                      ! skip this if im == 1
@@ -2141,14 +2141,14 @@ CONTAINS
 !$OMP PARALLEL DO PRIVATE (ig) DEFAULT(NONE) PRIVATE(gg) SHARED(cnt, i, o3, pw, pwdr2_gg)
                         DO ig = pw%pw_grid%first_gne0, cnt
                            gg = pw%pw_grid%g(i, ig)**2 - o3*pw%pw_grid%gsq(ig)
-                           pwdr2_gg%array(ig) = gg*pw%array(ig)/pw%pw_grid%gsq(ig)
+                           pwdr2_gg%array(ig) = gg/pw%pw_grid%gsq(ig)*pw%array(ig)
                         END DO
 !$OMP END PARALLEL DO
                      ELSE
 !$OMP PARALLEL DO PRIVATE (ig) DEFAULT(NONE) SHARED(cnt, i, j, pw, pwdr2_gg)
                         DO ig = pw%pw_grid%first_gne0, cnt
-                           pwdr2_gg%array(ig) = pw%array(ig)*(pw%pw_grid%g(i, ig)*pw%pw_grid%g(j, ig)) &
-                                                /pw%pw_grid%gsq(ig)
+                           pwdr2_gg%array(ig) = pw%array(ig)*((pw%pw_grid%g(i, ig)*pw%pw_grid%g(j, ig)) &
+                                                              /pw%pw_grid%gsq(ig))
                         END DO
 !$OMP END PARALLEL DO
                      END IF

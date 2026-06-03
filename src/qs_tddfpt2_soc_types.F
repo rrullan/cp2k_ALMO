@@ -1,16 +1,16 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 MODULE qs_tddfpt2_soc_types
    USE cp_array_utils,                  ONLY: cp_2d_r_p_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type,&
+                                              dbcsr_release
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type,&
-                                              dbcsr_release
    USE kinds,                           ONLY: dp
    USE libint_wrapper,                  ONLY: cp_libint_static_cleanup
    USE qs_grid_atom,                    ONLY: deallocate_grid_atom,&
@@ -59,7 +59,7 @@ MODULE qs_tddfpt2_soc_types
                                                          b_coeff = cp_fm_type()
       REAL(dp), ALLOCATABLE, DIMENSION(:)             :: soc_evals, &
                                                          soc_osc
-   END TYPE
+   END TYPE soc_env_type
 
 ! ************************************************************************************************
 ! \bief: an environment type analog to the xas_atom_env in xas_tdp_types:343
@@ -75,7 +75,7 @@ MODULE qs_tddfpt2_soc_types
       TYPE(harmonics_atom_p_type), DIMENSION(:), POINTER :: harmonics_atom_set => Null()
       TYPE(cp_2d_r_p_type), DIMENSION(:), POINTER        :: orb_sphi_so => Null()
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: soc_pp => Null()
-   END TYPE
+   END TYPE soc_atom_env_type
 
 CONTAINS
 

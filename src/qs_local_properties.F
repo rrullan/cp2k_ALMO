@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,14 +17,14 @@ MODULE qs_local_properties
                                               Rogers2002,&
                                               cite_reference
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_type
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type
    USE kinds,                           ONLY: dp
@@ -43,13 +43,13 @@ MODULE qs_local_properties
                                               pw_r3d_rs_type
    USE qs_collocate_density,            ONLY: calculate_rho_elec
    USE qs_core_energies,                ONLY: calculate_ptrace
-   USE qs_energy_matrix_w,              ONLY: qs_energies_compute_w
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type,&
                                               set_ks_env
+   USE qs_matrix_w,                     ONLY: compute_matrix_w
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_xc_density
@@ -84,7 +84,7 @@ CONTAINS
 
       INTEGER                                            :: handle, img, iounit, ispin, nimages, &
                                                             nkind, nspins
-      LOGICAL                                            :: gapw, gapw_xc
+      LOGICAL                                            :: gapw, gapw_xc, local_soft_only
       REAL(KIND=dp)                                      :: eban, eband, eh, exc, ovol
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
@@ -116,6 +116,7 @@ CONTAINS
       CALL get_qs_env(qs_env, nkind=nkind, dft_control=dft_control)
       gapw = dft_control%qs_control%gapw
       gapw_xc = dft_control%qs_control%gapw_xc
+      local_soft_only = dft_control%do_admm .OR. gapw .OR. gapw_xc
 
       nimages = dft_control%nimages
       nspins = dft_control%nspins
@@ -145,7 +146,7 @@ CONTAINS
          CALL set_ks_env(ks_env, matrix_w_kp=matrix_w)
       END IF
       ! band structure energy density
-      CALL qs_energies_compute_w(qs_env, .TRUE.)
+      CALL compute_matrix_w(qs_env, .TRUE.)
       CALL get_qs_env(qs_env, ks_env=ks_env, matrix_w_kp=matrix_w)
       CALL auxbas_pw_pool%create_pw(edens_r)
       CALL auxbas_pw_pool%create_pw(edens_g)
@@ -187,10 +188,12 @@ CONTAINS
       DEALLOCATE (rho_tot_gspace, rho_tot_rspace)
 
       IF (dft_control%do_admm) THEN
-         CALL cp_warn(__LOCATION__, "ADMM not supported for local energy calculation")
+         CALL cp_warn(__LOCATION__, &
+                      "ADMM local energy density contains only the regular-grid contribution")
       END IF
       IF (gapw_xc .OR. gapw) THEN
-         CALL cp_warn(__LOCATION__, "GAPW/GAPW_XC not supported for local energy calculation")
+         CALL cp_warn(__LOCATION__, &
+                      "GAPW/GAPW_XC local energy density contains only the soft regular-grid part")
       END IF
       ! XC energy density correction = E_xc(r) - V_xc(r)*rho(r)
       CALL get_qs_env(qs_env, input=input)
@@ -208,7 +211,7 @@ CONTAINS
       ! band energy
       CALL get_qs_env(qs_env, matrix_ks_kp=matrix_ks)
       CALL qs_rho_get(rho, rho_ao_kp=rho_ao_kp)
-      CALL calculate_ptrace(matrix_ks, rho_ao_kp, eband, nspins)
+      CALL calculate_ptrace(matrix_ks, rho_ao_kp, eband, nspins, .TRUE.)
 
       ! get full density
       CALL pw_copy(band_density, energy_density)
@@ -217,12 +220,24 @@ CONTAINS
 
       IF (iounit > 0) THEN
          WRITE (UNIT=iounit, FMT="(/,T3,A)") REPEAT("=", 78)
-         WRITE (UNIT=iounit, FMT="(T4,A,T52,A,T75,A)") "Local Energy Calculation", "GPW/GAPW", "Local"
+         IF (local_soft_only) THEN
+            WRITE (UNIT=iounit, FMT="(T4,A)") &
+               "Local Energy Calculation (regular-grid contribution only)"
+            WRITE (UNIT=iounit, FMT="(T4,A,T52,A,T68,A)") "Energy Component", "Reference", "Local Grid"
+         ELSE
+            WRITE (UNIT=iounit, FMT="(T4,A,T52,A,T75,A)") "Local Energy Calculation", "GPW/GAPW", "Local"
+         END IF
          WRITE (UNIT=iounit, FMT="(T4,A,T45,F15.8,T65,F15.8)") "Band Energy", eband, eban
          WRITE (UNIT=iounit, FMT="(T4,A,T65,F15.8)") "Hartree Energy Correction", eh
          WRITE (UNIT=iounit, FMT="(T4,A,T65,F15.8)") "XC Energy Correction", exc
-         WRITE (UNIT=iounit, FMT="(T4,A,T45,F15.8,T65,F15.8)") "Total Energy", &
-            energy%total, eban + eh + exc + energy%core_overlap + energy%core_self + energy%dispersion
+         IF (local_soft_only) THEN
+            WRITE (UNIT=iounit, FMT="(T4,A,T45,F15.8)") "Reference Total Energy", energy%total
+            WRITE (UNIT=iounit, FMT="(T4,A,T65,F15.8)") "Local Grid Energy Sum", &
+               eban + eh + exc + energy%core_overlap + energy%core_self + energy%dispersion
+         ELSE
+            WRITE (UNIT=iounit, FMT="(T4,A,T45,F15.8,T65,F15.8)") "Total Energy", &
+               energy%total, eban + eh + exc + energy%core_overlap + energy%core_self + energy%dispersion
+         END IF
          WRITE (UNIT=iounit, FMT="(T3,A)") REPEAT("=", 78)
       END IF
 
@@ -321,10 +336,12 @@ CONTAINS
       END IF
 
       IF (dft_control%do_admm) THEN
-         CALL cp_warn(__LOCATION__, "ADMM not supported for local energy calculation")
+         CALL cp_warn(__LOCATION__, &
+                      "ADMM local stress density contains only the regular-grid contribution")
       END IF
       IF (gapw_xc .OR. gapw) THEN
-         CALL cp_warn(__LOCATION__, "GAPW/GAPW_XC not supported for local energy calculation")
+         CALL cp_warn(__LOCATION__, &
+                      "GAPW/GAPW_XC local stress density contains only the soft regular-grid part")
       END IF
       ! XC energy density correction = E_xc(r) - V_xc(r)*rho(r)
       CALL get_qs_env(qs_env, ks_env=ks_env, input=input, rho=rho_struct)
@@ -340,9 +357,9 @@ CONTAINS
          CALL auxbas_pw_pool%create_pw(efield(i))
          CALL pw_copy(v_hartree_gspace, efield(i))
       END DO
-      CALL pw_derive(efield(1), (/1, 0, 0/))
-      CALL pw_derive(efield(2), (/0, 1, 0/))
-      CALL pw_derive(efield(3), (/0, 0, 1/))
+      CALL pw_derive(efield(1), [1, 0, 0])
+      CALL pw_derive(efield(2), [0, 1, 0])
+      CALL pw_derive(efield(3), [0, 0, 1])
       CALL auxbas_pw_pool%give_back_pw(v_hartree_gspace)
       DO i = 1, 3
          CALL auxbas_pw_pool%give_back_pw(efield(i))

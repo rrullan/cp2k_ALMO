@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,6 +12,7 @@
 !> \author Joost VandeVondele (10.2003)
 ! **************************************************************************************************
 MODULE qs_scf_wfn_mix
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr
    USE cp_files,                        ONLY: close_file,&
                                               open_file
@@ -23,7 +24,6 @@ MODULE qs_scf_wfn_mix
                                               cp_fm_release,&
                                               cp_fm_to_fm,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_constants,                 ONLY: wfn_mix_orig_external,&
                                               wfn_mix_orig_occ,&
                                               wfn_mix_orig_virtual
@@ -41,6 +41,7 @@ MODULE qs_scf_wfn_mix
    USE qs_mo_methods,                   ONLY: calculate_orthonormality
    USE qs_mo_types,                     ONLY: deallocate_mo_set,&
                                               duplicate_mo_set,&
+                                              get_mo_set,&
                                               mo_set_type
    USE qs_scf_types,                    ONLY: qs_scf_env_type,&
                                               special_diag_method_nr
@@ -89,10 +90,10 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'wfn_mix'
 
       CHARACTER(LEN=default_path_length)                 :: read_file_name
-      INTEGER :: handle, i_rep, ispin, mark_ind, mark_number, n_rep, orig_mo_index, &
+      INTEGER :: handle, homo, i_rep, ispin, mark_ind, mark_number, n_rep, nmo, orig_mo_index, &
          orig_spin_index, orig_type, restart_unit, result_mo_index, result_spin_index
       LOGICAL                                            :: explicit, is_file, my_for_rtp, &
-                                                            overwrite_mos
+                                                            overwrite_mos, reverse_mo_index
       REAL(KIND=dp)                                      :: orig_scale, orthonormality, result_scale
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct_vector
       TYPE(cp_fm_type)                                   :: matrix_x, matrix_y
@@ -142,11 +143,11 @@ CONTAINS
             CALL section_vals_val_get(update_section, "RESULT_MO_INDEX", i_rep_section=i_rep, i_val=result_mo_index)
             CALL section_vals_val_get(update_section, "RESULT_MARKED_STATE", i_rep_section=i_rep, i_val=mark_number)
             CALL section_vals_val_get(update_section, "RESULT_SPIN_INDEX", i_rep_section=i_rep, i_val=result_spin_index)
-            ! result_scale is the 'b' coefficient
+            ! result_scale is the 'a' coefficient
             CALL section_vals_val_get(update_section, "RESULT_SCALE", i_rep_section=i_rep, r_val=result_scale)
 
             mark_ind = 1
-            IF (mark_number .GT. 0) result_mo_index = marked_states(mark_number, result_spin_index, mark_ind)
+            IF (mark_number > 0) result_mo_index = marked_states(mark_number, result_spin_index, mark_ind)
 
             ! The MO that will be added to the previous one, 'x'
             CALL section_vals_val_get(update_section, "ORIG_TYPE", i_rep_section=i_rep, &
@@ -154,29 +155,41 @@ CONTAINS
             CALL section_vals_val_get(update_section, "ORIG_MO_INDEX", i_rep_section=i_rep, i_val=orig_mo_index)
             CALL section_vals_val_get(update_section, "ORIG_MARKED_STATE", i_rep_section=i_rep, i_val=mark_number)
             CALL section_vals_val_get(update_section, "ORIG_SPIN_INDEX", i_rep_section=i_rep, i_val=orig_spin_index)
-            ! orig_scal is the 'a' coefficient
+            ! orig_scale is the 'b' coefficient
             CALL section_vals_val_get(update_section, "ORIG_SCALE", i_rep_section=i_rep, r_val=orig_scale)
 
             IF (orig_type == wfn_mix_orig_virtual) mark_ind = 2
-            IF (mark_number .GT. 0) orig_mo_index = marked_states(mark_number, orig_spin_index, mark_ind)
+            IF (mark_number > 0) orig_mo_index = marked_states(mark_number, orig_spin_index, mark_ind)
 
             CALL section_vals_val_get(wfn_mix_section, "OVERWRITE_MOS", l_val=overwrite_mos)
 
-            ! First get a copy of the proper orig
-            ! Origin is in the MO matrix
-            IF (orig_type == wfn_mix_orig_occ) THEN
-               CALL cp_fm_to_fm(mos(orig_spin_index)%mo_coeff, matrix_x, 1, &
-                                mos(orig_spin_index)%nmo - orig_mo_index + 1, 1)
+            CALL section_vals_val_get(update_section, "REVERSE_MO_INDEX", i_rep_section=i_rep, l_val=reverse_mo_index)
 
-               ! Orgin is in the virtual matrix
+            ! First get a copy of the proper orig
+            ! Origin is in an occupied MO
+            IF (orig_type == wfn_mix_orig_occ) THEN
+               IF (reverse_mo_index) THEN
+                  CALL cp_fm_to_fm(mos(orig_spin_index)%mo_coeff, matrix_x, 1, &
+                                   orig_mo_index, 1)
+               ELSE
+                  CALL cp_fm_to_fm(mos(orig_spin_index)%mo_coeff, matrix_x, 1, &
+                                   mos(orig_spin_index)%nmo - orig_mo_index + 1, 1)
+               END IF
+               ! Origin is an unoccupied MO
             ELSE IF (orig_type == wfn_mix_orig_virtual) THEN
-               IF (.NOT. ASSOCIATED(unoccupied_orbs)) &
+               CALL get_mo_set(mos(orig_spin_index), homo=homo, nmo=nmo)
+               ! check whether the MO is already available in the original MO set
+               IF (orig_mo_index + homo <= nmo) THEN
+                  CALL cp_fm_to_fm(mos(orig_spin_index)%mo_coeff, matrix_x, 1, orig_mo_index + homo, 1)
+               ELSE IF (.NOT. ASSOCIATED(unoccupied_orbs)) THEN
                   CALL cp_abort(__LOCATION__, &
                                 "If ORIG_TYPE is set to VIRTUAL, the array unoccupied_orbs must be associated! "// &
                                 "For instance, ask in the SCF section to compute virtual orbitals after the GS optimization.")
-               CALL cp_fm_to_fm(unoccupied_orbs(orig_spin_index), matrix_x, 1, orig_mo_index, 1)
+               ELSE
+                  CALL cp_fm_to_fm(unoccupied_orbs(orig_spin_index), matrix_x, 1, orig_mo_index, 1)
+               END IF
 
-               ! Orgin is to be read from an external .wfn file
+               ! Origin is to be read from an external .wfn file
             ELSE IF (orig_type == wfn_mix_orig_external) THEN
                CALL section_vals_val_get(update_section, "ORIG_EXT_FILE_NAME", i_rep_section=i_rep, &
                                          c_val=read_file_name)
@@ -207,9 +220,13 @@ CONTAINS
                                          rst_unit=restart_unit)
                IF (para_env%is_source()) CALL close_file(unit_number=restart_unit)
 
-               CALL cp_fm_to_fm(mos_orig_ext(orig_spin_index)%mo_coeff, matrix_x, 1, &
-                                mos_orig_ext(orig_spin_index)%nmo - orig_mo_index + 1, 1)
-
+               IF (reverse_mo_index) THEN
+                  CALL cp_fm_to_fm(mos_orig_ext(orig_spin_index)%mo_coeff, matrix_x, 1, &
+                                   orig_mo_index, 1)
+               ELSE
+                  CALL cp_fm_to_fm(mos_orig_ext(orig_spin_index)%mo_coeff, matrix_x, 1, &
+                                   mos_orig_ext(orig_spin_index)%nmo - orig_mo_index + 1, 1)
+               END IF
                DO ispin = 1, SIZE(mos_orig_ext)
                   CALL deallocate_mo_set(mos_orig_ext(ispin))
                END DO
@@ -217,14 +234,25 @@ CONTAINS
             END IF
 
             ! Second, get a copy of the target
-            CALL cp_fm_to_fm(mos_new(result_spin_index)%mo_coeff, matrix_y, &
-                             1, mos_new(result_spin_index)%nmo - result_mo_index + 1, 1)
+            IF (reverse_mo_index) THEN
+               CALL cp_fm_to_fm(mos_new(result_spin_index)%mo_coeff, matrix_y, &
+                                1, result_mo_index, 1)
+            ELSE
+               CALL cp_fm_to_fm(mos_new(result_spin_index)%mo_coeff, matrix_y, &
+                                1, mos_new(result_spin_index)%nmo - result_mo_index + 1, 1)
+            END IF
 
             ! Third, perform the mix
             CALL cp_fm_scale_and_add(result_scale, matrix_y, orig_scale, matrix_x)
+
             ! and copy back in the result mos
-            CALL cp_fm_to_fm(matrix_y, mos_new(result_spin_index)%mo_coeff, &
-                             1, 1, mos_new(result_spin_index)%nmo - result_mo_index + 1)
+            IF (reverse_mo_index) THEN
+               CALL cp_fm_to_fm(matrix_y, mos_new(result_spin_index)%mo_coeff, &
+                                1, 1, result_mo_index)
+            ELSE
+               CALL cp_fm_to_fm(matrix_y, mos_new(result_spin_index)%mo_coeff, &
+                                1, 1, mos_new(result_spin_index)%nmo - result_mo_index + 1)
+            END IF
          END DO
 
          CALL cp_fm_release(matrix_x)
@@ -246,14 +274,12 @@ CONTAINS
             END IF
 
             IF (output_unit > 0) THEN
-               WRITE (output_unit, '()')
-               WRITE (output_unit, '(T2,A,T61,E20.4)') &
+               WRITE (UNIT=output_unit, FMT="(/,T2,A,T61,E20.4)") &
                   "Maximum deviation from MO S-orthonormality", orthonormality
-               WRITE (output_unit, '(T2,A)') "Writing new MOs to file"
+               WRITE (UNIT=output_unit, FMT="(T2,A)") "Writing new MOs to file"
             END IF
 
-            ! *** Write WaveFunction restart file ***
-
+            ! Write wavefunction restart file
             DO ispin = 1, SIZE(mos_new)
                IF (overwrite_mos) THEN
                   CALL cp_fm_to_fm(mos_new(ispin)%mo_coeff, mos(ispin)%mo_coeff)
@@ -263,7 +289,8 @@ CONTAINS
                IF (mos(1)%use_mo_coeff_b) &
                   CALL copy_fm_to_dbcsr(mos_new(ispin)%mo_coeff, mos(ispin)%mo_coeff_b)
             END DO
-            CALL write_mo_set_to_restart(mos_new, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set)
+            CALL write_mo_set_to_restart(mos_new, particle_set, dft_section=dft_section, &
+                                         qs_kind_set=qs_kind_set)
          END IF
 
          DO ispin = 1, SIZE(mos_new)

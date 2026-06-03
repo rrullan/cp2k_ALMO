@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,6 +12,7 @@
 !> \author JGH
 ! **************************************************************************************************
 MODULE qs_dos
+   USE cp_array_utils,                  ONLY: cp_1d_r_p_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
@@ -24,8 +25,14 @@ MODULE qs_dos
                                               section_vals_val_get
    USE kinds,                           ONLY: default_string_length,&
                                               dp
-   USE kpoint_types,                    ONLY: kpoint_type
+   USE kpoint_types,                    ONLY: kpoint_release,&
+                                              kpoint_type
    USE message_passing,                 ONLY: mp_para_env_type
+   USE qs_band_structure,               ONLY: calculate_kp_orbitals
+   USE qs_dos_utils,                    ONLY: &
+        add_broadened_peak, broadening_cutoff, dos_density_scale, dos_energy_label, &
+        dos_energy_scale, dos_energy_unit_ev, dos_energy_zero_absolute, dos_energy_zero_auto, &
+        dos_energy_zero_hoco, dos_energy_zero_label, dos_resolve_energy_zero, write_broadening_info
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_mo_types,                     ONLY: get_mo_set,&
@@ -48,181 +55,39 @@ CONTAINS
 !> \brief Compute and write density of states
 !> \param mos ...
 !> \param dft_section ...
+!> \param unoccupied_evals ...
+!> \param smearing_enabled ...
 !> \date    26.02.2008
 !> \par History:
 !> \author  JGH
 !> \version 1.0
 ! **************************************************************************************************
-   SUBROUTINE calculate_dos(mos, dft_section)
+   SUBROUTINE calculate_dos(mos, dft_section, unoccupied_evals, smearing_enabled)
 
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(section_vals_type), POINTER                   :: dft_section
+      TYPE(cp_1d_r_p_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: unoccupied_evals
+      LOGICAL, INTENT(IN), OPTIONAL                      :: smearing_enabled
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'calculate_dos'
 
+      CHARACTER(LEN=16)                                  :: energy_label
       CHARACTER(LEN=20)                                  :: fmtstr_data
+      CHARACTER(LEN=32)                                  :: zero_label
       CHARACTER(LEN=default_string_length)               :: my_act, my_pos
-      INTEGER                                            :: handle, i, iounit, ispin, iterstep, iv, &
-                                                            iw, ndigits, nhist, nmo(2), nspins
-      LOGICAL                                            :: append, ionode, should_output
-      REAL(KIND=dp)                                      :: de, e1, e2, e_fermi(2), emax, emin, eval
+      INTEGER :: broaden_type, energy_unit, energy_zero, handle, i, iounit, ispin, iterstep, iv, &
+         iw, ndigits, nhist, nmo(2), nspins, nstates(2), nvirt(2), resolved_energy_zero
+      LOGICAL                                            :: append, do_broaden, &
+                                                            fractional_occupation, ionode, &
+                                                            should_output, smear_on
+      REAL(KIND=dp) :: broaden_cutoff, broaden_width, de, density_factor, e1, e2, e_fermi(2), &
+         emax, emin, energy_factor, energy_ref(2), ev_factor, eval, hoco(2), out_density, out_occ, &
+         voigt_mixing
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ehist, hist, occval
       REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues, occupation_numbers
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(mo_set_type), POINTER                         :: mo_set
-
-      NULLIFY (logger)
-      logger => cp_get_default_logger()
-      ionode = logger%para_env%is_source()
-      should_output = BTEST(cp_print_key_should_output(logger%iter_info, dft_section, &
-                                                       "PRINT%DOS"), cp_p_file)
-      iounit = cp_logger_get_default_io_unit(logger)
-      IF ((.NOT. should_output)) RETURN
-
-      CALL timeset(routineN, handle)
-      iterstep = logger%iter_info%iteration(logger%iter_info%n_rlevel)
-
-      IF (iounit > 0) WRITE (UNIT=iounit, FMT='(/,(T3,A,T61,I10))') &
-         " Calculate DOS at iteration step ", iterstep
-
-      CALL section_vals_val_get(dft_section, "PRINT%DOS%DELTA_E", r_val=de)
-      CALL section_vals_val_get(dft_section, "PRINT%PDOS%APPEND", l_val=append)
-      CALL section_vals_val_get(dft_section, "PRINT%DOS%NDIGITS", i_val=ndigits)
-      IF (append .AND. iterstep > 1) THEN
-         my_pos = "APPEND"
-      ELSE
-         my_pos = "REWIND"
-      END IF
-      ndigits = MIN(MAX(ndigits, 1), 10)
-
-      emin = 1.e10_dp
-      emax = -1.e10_dp
-      nspins = SIZE(mos)
-      nmo(:) = 0
-
-      DO ispin = 1, nspins
-         mo_set => mos(ispin)
-         CALL get_mo_set(mo_set=mo_set, nmo=nmo(ispin), mu=e_fermi(ispin))
-         eigenvalues => mo_set%eigenvalues
-         e1 = MINVAL(eigenvalues(1:nmo(ispin)))
-         e2 = MAXVAL(eigenvalues(1:nmo(ispin)))
-         emin = MIN(emin, e1)
-         emax = MAX(emax, e2)
-      END DO
-
-      IF (de > 0.0_dp) THEN
-         nhist = NINT((emax - emin)/de) + 1
-         ALLOCATE (hist(nhist, nspins), occval(nhist, nspins), ehist(nhist, nspins))
-         hist = 0.0_dp
-         occval = 0.0_dp
-         ehist = 0.0_dp
-         DO ispin = 1, nspins
-            mo_set => mos(ispin)
-            occupation_numbers => mo_set%occupation_numbers
-            eigenvalues => mo_set%eigenvalues
-            DO i = 1, nmo(ispin)
-               eval = eigenvalues(i) - emin
-               iv = NINT(eval/de) + 1
-               CPASSERT((iv > 0) .AND. (iv <= nhist))
-               hist(iv, ispin) = hist(iv, ispin) + 1.0_dp
-               occval(iv, ispin) = occval(iv, ispin) + occupation_numbers(i)
-            END DO
-            hist(:, ispin) = hist(:, ispin)/REAL(nmo(ispin), KIND=dp)
-         END DO
-         DO i = 1, nhist
-            ehist(i, 1:nspins) = emin + (i - 1)*de
-         END DO
-      ELSE
-         nhist = MAXVAL(nmo)
-         ALLOCATE (hist(nhist, nspins), occval(nhist, nspins), ehist(nhist, nspins))
-         hist = 0.0_dp
-         occval = 0.0_dp
-         ehist = 0.0_dp
-         DO ispin = 1, nspins
-            mo_set => mos(ispin)
-            occupation_numbers => mo_set%occupation_numbers
-            eigenvalues => mo_set%eigenvalues
-            DO i = 1, nmo(ispin)
-               ehist(i, ispin) = eigenvalues(i)
-               hist(i, ispin) = 1.0_dp
-               occval(i, ispin) = occupation_numbers(i)
-            END DO
-            hist(:, ispin) = hist(:, ispin)/REAL(nmo(ispin), KIND=dp)
-         END DO
-      END IF
-
-      my_act = "WRITE"
-      iw = cp_print_key_unit_nr(logger, dft_section, "PRINT%DOS", &
-                                extension=".dos", file_position=my_pos, file_action=my_act, &
-                                file_form="FORMATTED")
-      IF (iw > 0) THEN
-         IF (nspins == 2) THEN
-            WRITE (UNIT=iw, FMT="(T2,A,I0,A,2F12.6)") &
-               "# DOS at iteration step i = ", iterstep, ", E_Fermi[a.u.] = ", e_fermi(1:2)
-            WRITE (UNIT=iw, FMT="(T2,A, A)") "#  Energy[a.u.]  Alpha_Density    Occupation", &
-               "    Energy[a.u.]  Beta_Density     Occupation"
-            ! (2(F15.8,2F15.ndigits))
-            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(2(F15.8,2F15.", ndigits, "))"
-         ELSE
-            WRITE (UNIT=iw, FMT="(T2,A,I0,A,F12.6)") &
-               "# DOS at iteration step i = ", iterstep, ", E_Fermi[a.u.] = ", e_fermi(1)
-            WRITE (UNIT=iw, FMT="(T2,A)") "#  Energy[a.u.]       Density     Occupation"
-            ! (F15.8,2F15.ndigits)
-            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(F15.8,2F15.", ndigits, ")"
-         END IF
-         DO i = 1, nhist
-            IF (nspins == 2) THEN
-               e1 = ehist(i, 1)
-               e2 = ehist(i, 2)
-               ! fmtstr_data == "(2(F15.8,2F15.xx))"
-               WRITE (UNIT=iw, FMT=fmtstr_data) e1, hist(i, 1), occval(i, 1), &
-                  e2, hist(i, 2), occval(i, 2)
-            ELSE
-               eval = ehist(i, 1)
-               ! fmtstr_data == "(F15.8,2F15.xx)"
-               WRITE (UNIT=iw, FMT=fmtstr_data) eval, hist(i, 1), occval(i, 1)
-            END IF
-         END DO
-      END IF
-      CALL cp_print_key_finished_output(iw, logger, dft_section, "PRINT%DOS")
-      DEALLOCATE (hist, occval, ehist)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE calculate_dos
-
-! **************************************************************************************************
-!> \brief Compute and write density of states (kpoints)
-!> \param kpoints ...
-!> \param qs_env ...
-!> \param dft_section ...
-!> \date    26.02.2008
-!> \par History:
-!> \author  JGH
-!> \version 1.0
-! **************************************************************************************************
-   SUBROUTINE calculate_dos_kp(kpoints, qs_env, dft_section)
-
-      TYPE(kpoint_type), POINTER                         :: kpoints
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(section_vals_type), POINTER                   :: dft_section
-
-      CHARACTER(len=*), PARAMETER                        :: routineN = 'calculate_dos_kp'
-
-      CHARACTER(LEN=16)                                  :: fmtstr_data
-      CHARACTER(LEN=default_string_length)               :: my_act, my_pos
-      INTEGER                                            :: handle, i, ik, iounit, ispin, iterstep, &
-                                                            iv, iw, ndigits, nhist, nmo(2), &
-                                                            nmo_kp, nspins
-      LOGICAL                                            :: append, ionode, should_output
-      REAL(KIND=dp)                                      :: de, e1, e2, emax, emin, eval, wkp
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ehist, hist, occval
-      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues, occupation_numbers
-      TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(mo_set_type), DIMENSION(:, :), POINTER        :: mos
-      TYPE(mo_set_type), POINTER                         :: mo_set
-      TYPE(mp_para_env_type), POINTER                    :: para_env
 
       NULLIFY (logger)
       logger => cp_get_default_logger()
@@ -241,7 +106,294 @@ CONTAINS
       CALL section_vals_val_get(dft_section, "PRINT%DOS%DELTA_E", r_val=de)
       CALL section_vals_val_get(dft_section, "PRINT%DOS%APPEND", l_val=append)
       CALL section_vals_val_get(dft_section, "PRINT%DOS%NDIGITS", i_val=ndigits)
-      ! ensure a lower value for the histogram width
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%ENERGY_UNIT", i_val=energy_unit)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%ENERGY_ZERO", i_val=energy_zero)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%BROADEN_TYPE", i_val=broaden_type)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%BROADEN_WIDTH", r_val=broaden_width)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%VOIGT_MIXING", r_val=voigt_mixing)
+      IF (append .AND. iterstep > 1) THEN
+         my_pos = "APPEND"
+      ELSE
+         my_pos = "REWIND"
+      END IF
+      ndigits = MIN(MAX(ndigits, 1), 10)
+      do_broaden = (broaden_width > 0.0_dp)
+      IF (do_broaden) de = MAX(de, 0.00001_dp)
+
+      emin = 1.e10_dp
+      emax = -1.e10_dp
+      nspins = SIZE(mos)
+      nmo(:) = 0
+      nvirt(:) = 0
+      nstates(:) = 0
+      hoco(:) = -HUGE(0.0_dp)
+      fractional_occupation = .FALSE.
+      smear_on = .FALSE.
+      IF (PRESENT(smearing_enabled)) smear_on = smearing_enabled
+
+      DO ispin = 1, nspins
+         mo_set => mos(ispin)
+         CALL get_mo_set(mo_set=mo_set, nmo=nmo(ispin), mu=e_fermi(ispin))
+         eigenvalues => mo_set%eigenvalues
+         occupation_numbers => mo_set%occupation_numbers
+         DO i = 1, nmo(ispin)
+            IF (occupation_numbers(i) > 1.0e-10_dp) hoco(ispin) = MAX(hoco(ispin), eigenvalues(i))
+            IF (ABS(occupation_numbers(i) - REAL(NINT(occupation_numbers(i)), KIND=dp)) > &
+                1.0e-8_dp) fractional_occupation = .TRUE.
+         END DO
+         IF (hoco(ispin) < -0.5_dp*HUGE(0.0_dp)) hoco(ispin) = e_fermi(ispin)
+         IF (PRESENT(unoccupied_evals)) THEN
+            IF (ASSOCIATED(unoccupied_evals(ispin)%array)) nvirt(ispin) = SIZE(unoccupied_evals(ispin)%array)
+         END IF
+         nstates(ispin) = nmo(ispin) + nvirt(ispin)
+         e1 = MINVAL(eigenvalues(1:nmo(ispin)))
+         e2 = MAXVAL(eigenvalues(1:nmo(ispin)))
+         IF (nvirt(ispin) > 0) THEN
+            e1 = MIN(e1, MINVAL(unoccupied_evals(ispin)%array(1:nvirt(ispin))))
+            e2 = MAX(e2, MAXVAL(unoccupied_evals(ispin)%array(1:nvirt(ispin))))
+         END IF
+         emin = MIN(emin, e1)
+         emax = MAX(emax, e2)
+      END DO
+
+      IF (do_broaden) THEN
+         broaden_cutoff = broadening_cutoff(broaden_type, broaden_width)
+         emin = emin - broaden_cutoff
+         emax = emax + broaden_cutoff
+         nhist = NINT((emax - emin)/de) + 1
+         ALLOCATE (hist(nhist, nspins), occval(nhist, nspins), ehist(nhist, nspins))
+         hist = 0.0_dp
+         occval = 0.0_dp
+         ehist = 0.0_dp
+         DO ispin = 1, nspins
+            mo_set => mos(ispin)
+            occupation_numbers => mo_set%occupation_numbers
+            eigenvalues => mo_set%eigenvalues
+            DO i = 1, nmo(ispin)
+               CALL add_broadened_peak(hist(:, ispin), occval(:, ispin), emin, de, eigenvalues(i), &
+                                       occupation_numbers(i), 1.0_dp, broaden_type, broaden_width, &
+                                       voigt_mixing)
+            END DO
+            DO i = 1, nvirt(ispin)
+               CALL add_broadened_peak(hist(:, ispin), occval(:, ispin), emin, de, &
+                                       unoccupied_evals(ispin)%array(i), 0.0_dp, 1.0_dp, &
+                                       broaden_type, broaden_width, voigt_mixing)
+            END DO
+         END DO
+         DO i = 1, nhist
+            ehist(i, 1:nspins) = emin + (i - 1)*de
+         END DO
+      ELSE IF (de > 0.0_dp) THEN
+         nhist = NINT((emax - emin)/de) + 1
+         ALLOCATE (hist(nhist, nspins), occval(nhist, nspins), ehist(nhist, nspins))
+         hist = 0.0_dp
+         occval = 0.0_dp
+         ehist = 0.0_dp
+         DO ispin = 1, nspins
+            mo_set => mos(ispin)
+            occupation_numbers => mo_set%occupation_numbers
+            eigenvalues => mo_set%eigenvalues
+            DO i = 1, nmo(ispin)
+               eval = eigenvalues(i) - emin
+               iv = NINT(eval/de) + 1
+               CPASSERT((iv > 0) .AND. (iv <= nhist))
+               hist(iv, ispin) = hist(iv, ispin) + 1.0_dp
+               occval(iv, ispin) = occval(iv, ispin) + occupation_numbers(i)
+            END DO
+            DO i = 1, nvirt(ispin)
+               eval = unoccupied_evals(ispin)%array(i) - emin
+               iv = NINT(eval/de) + 1
+               CPASSERT((iv > 0) .AND. (iv <= nhist))
+               hist(iv, ispin) = hist(iv, ispin) + 1.0_dp
+            END DO
+            hist(:, ispin) = hist(:, ispin)/REAL(nstates(ispin), KIND=dp)
+         END DO
+         DO i = 1, nhist
+            ehist(i, 1:nspins) = emin + (i - 1)*de
+         END DO
+      ELSE
+         nhist = MAXVAL(nstates)
+         ALLOCATE (hist(nhist, nspins), occval(nhist, nspins), ehist(nhist, nspins))
+         hist = 0.0_dp
+         occval = 0.0_dp
+         ehist = 0.0_dp
+         DO ispin = 1, nspins
+            mo_set => mos(ispin)
+            occupation_numbers => mo_set%occupation_numbers
+            eigenvalues => mo_set%eigenvalues
+            DO i = 1, nmo(ispin)
+               ehist(i, ispin) = eigenvalues(i)
+               hist(i, ispin) = 1.0_dp
+               occval(i, ispin) = occupation_numbers(i)
+            END DO
+            DO i = 1, nvirt(ispin)
+               ehist(nmo(ispin) + i, ispin) = unoccupied_evals(ispin)%array(i)
+               hist(nmo(ispin) + i, ispin) = 1.0_dp
+            END DO
+            hist(:, ispin) = hist(:, ispin)/REAL(nstates(ispin), KIND=dp)
+         END DO
+      END IF
+
+      resolved_energy_zero = dos_resolve_energy_zero(energy_zero, smear_on, fractional_occupation)
+      SELECT CASE (resolved_energy_zero)
+      CASE (dos_energy_zero_absolute)
+         energy_ref(:) = 0.0_dp
+      CASE (dos_energy_zero_hoco)
+         energy_ref(:) = hoco(:)
+      CASE DEFAULT
+         energy_ref(:) = e_fermi(:)
+      END SELECT
+      energy_factor = dos_energy_scale(energy_unit)
+      density_factor = dos_density_scale(energy_unit)
+      energy_label = dos_energy_label(energy_unit)
+      zero_label = dos_energy_zero_label(resolved_energy_zero)
+      IF (energy_zero == dos_energy_zero_auto) zero_label = "AUTO -> "//TRIM(zero_label)
+      ev_factor = dos_energy_scale(dos_energy_unit_ev)
+
+      my_act = "WRITE"
+      iw = cp_print_key_unit_nr(logger, dft_section, "PRINT%DOS", &
+                                extension=".dos", file_position=my_pos, file_action=my_act, &
+                                file_form="FORMATTED")
+      IF (iw > 0) THEN
+         WRITE (UNIT=iw, FMT="(A,I0)") "# DOS at iteration step i = ", iterstep
+         IF (nspins == 2) THEN
+            WRITE (UNIT=iw, FMT="(A,2F12.6,A,2F12.6,A)") &
+               "# E(Fermi) = ", e_fermi(1:2), " a.u. = ", e_fermi(1:2)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,2F12.6,A,2F12.6,A)") &
+               "# E(HOCO)  = ", hoco(1:2), " a.u. = ", hoco(1:2)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,A)") "# Energy zero: ", TRIM(zero_label)
+            IF (do_broaden) CALL write_broadening_info(iw, broaden_type, broaden_width, voigt_mixing)
+            WRITE (UNIT=iw, FMT="(T2,A,A,A)") "#  "//TRIM(energy_label)//"  Alpha_Density    Occupation", &
+               "    "//TRIM(energy_label), "  Beta_Density     Occupation"
+            ! (2(F15.8,2F20.ndigits))
+            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(2(F15.8,2F20.", ndigits, "))"
+         ELSE
+            WRITE (UNIT=iw, FMT="(A,F12.6,A,F12.6,A)") &
+               "# E(Fermi) = ", e_fermi(1), " a.u. = ", e_fermi(1)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,F12.6,A,F12.6,A)") &
+               "# E(HOCO)  = ", hoco(1), " a.u. = ", hoco(1)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,A)") "# Energy zero: ", TRIM(zero_label)
+            IF (do_broaden) CALL write_broadening_info(iw, broaden_type, broaden_width, voigt_mixing)
+            WRITE (UNIT=iw, FMT="(A,A)") "# "//TRIM(energy_label), "       Density     Occupation"
+            ! (F15.8,2F20.ndigits)
+            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(F15.8,2F20.", ndigits, ")"
+         END IF
+         DO i = 1, nhist
+            IF (nspins == 2) THEN
+               e1 = (ehist(i, 1) - energy_ref(1))*energy_factor
+               e2 = (ehist(i, 2) - energy_ref(2))*energy_factor
+               ! fmtstr_data == "(2(F15.8,2F20.xx))"
+               IF (do_broaden) THEN
+                  WRITE (UNIT=iw, FMT=fmtstr_data) e1, hist(i, 1)*density_factor, &
+                     occval(i, 1)*density_factor, e2, hist(i, 2)*density_factor, &
+                     occval(i, 2)*density_factor
+               ELSE
+                  WRITE (UNIT=iw, FMT=fmtstr_data) e1, hist(i, 1), occval(i, 1), &
+                     e2, hist(i, 2), occval(i, 2)
+               END IF
+            ELSE
+               eval = (ehist(i, 1) - energy_ref(1))*energy_factor
+               ! fmtstr_data == "(F15.8,2F20.xx)"
+               IF (do_broaden) THEN
+                  out_density = hist(i, 1)*density_factor
+                  out_occ = occval(i, 1)*density_factor
+               ELSE
+                  out_density = hist(i, 1)
+                  out_occ = occval(i, 1)
+               END IF
+               WRITE (UNIT=iw, FMT=fmtstr_data) eval, out_density, out_occ
+            END IF
+         END DO
+      END IF
+      CALL cp_print_key_finished_output(iw, logger, dft_section, "PRINT%DOS")
+      DEALLOCATE (hist, occval, ehist)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE calculate_dos
+
+! **************************************************************************************************
+!> \brief Compute and write density of states (kpoints)
+!> \param qs_env ...
+!> \param dft_section ...
+!> \date    26.02.2008
+!> \par History:
+!> \author  JGH
+!> \version 1.0
+! **************************************************************************************************
+   SUBROUTINE calculate_dos_kp(qs_env, dft_section)
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(section_vals_type), POINTER                   :: dft_section
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'calculate_dos_kp'
+
+      CHARACTER(LEN=16)                                  :: energy_label, fmtstr_data
+      CHARACTER(LEN=32)                                  :: zero_label
+      CHARACTER(LEN=default_string_length)               :: my_act, my_pos
+      INTEGER :: broaden_type, energy_unit, energy_zero, fractional_occupation_int, handle, i, ik, &
+         iounit, ispin, iterstep, iv, iw, ndigits, nhist, nmo(2), nmo_kp, nspins, &
+         resolved_energy_zero
+      INTEGER, DIMENSION(:), POINTER                     :: nkp_grid
+      LOGICAL                                            :: append, do_broaden, explicit, &
+                                                            fractional_occupation, ionode, &
+                                                            should_output
+      REAL(KIND=dp) :: broaden_cutoff, broaden_width, de, density_factor, e1, e2, e_fermi(2), &
+         emax, emin, energy_factor, energy_ref(2), ev_factor, eval, hoco(2), out_density, out_occ, &
+         voigt_mixing, wkp
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ehist, hist, occval
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: eigenvalues, occupation_numbers
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(kpoint_type), POINTER                         :: kpoints
+      TYPE(mo_set_type), DIMENSION(:, :), POINTER        :: mos
+      TYPE(mo_set_type), POINTER                         :: mo_set
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+
+      NULLIFY (logger, kpoints)
+      logger => cp_get_default_logger()
+      ionode = logger%para_env%is_source()
+      should_output = BTEST(cp_print_key_should_output(logger%iter_info, dft_section, &
+                                                       "PRINT%DOS"), cp_p_file)
+      iounit = cp_logger_get_default_io_unit(logger)
+      IF ((.NOT. should_output)) RETURN
+
+      CALL timeset(routineN, handle)
+      iterstep = logger%iter_info%iteration(logger%iter_info%n_rlevel)
+
+      ! check whether the user requested a different MP grid for the DOS
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%MP_GRID", i_vals=nkp_grid, explicit=explicit)
+
+      IF (explicit) THEN
+         ! make sure is a valid grid
+         DO i = 1, 3
+            IF (nkp_grid(i) < 1) THEN
+               WRITE (UNIT=iounit, FMT='(T4,A,I3,A,I1)') &
+                  "Invalid kpoint grid for DOS ", nkp_grid(i), " in dimension ", i
+               CPABORT("")
+            END IF
+         END DO
+         ! calculate orbitals and energies
+         CALL calculate_kp_orbitals(qs_env, kpoints, "MONKHORST-PACK", 0, nkp_grid)
+      ELSE
+         ! use the kpoints from the environment
+         CALL get_qs_env(qs_env, kpoints=kpoints)
+      END IF
+
+      IF (iounit > 0) WRITE (UNIT=iounit, FMT='(/,(T3,A,T61,I10))') &
+         " Calculate DOS at iteration step ", iterstep
+      IF (iounit > 0) WRITE (UNIT=iounit, FMT='((T3,A,3I3,A))') &
+         " Using a", kpoints%nkp_grid(:), ' '//TRIM(kpoints%kp_scheme)//' grid'
+
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%DELTA_E", r_val=de)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%APPEND", l_val=append)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%NDIGITS", i_val=ndigits)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%ENERGY_UNIT", i_val=energy_unit)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%ENERGY_ZERO", i_val=energy_zero)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%BROADEN_TYPE", i_val=broaden_type)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%BROADEN_WIDTH", r_val=broaden_width)
+      CALL section_vals_val_get(dft_section, "PRINT%DOS%VOIGT_MIXING", r_val=voigt_mixing)
+      ! ensure a lower value for the DOS grid width
       de = MAX(de, 0.00001_dp)
       IF (append .AND. iterstep > 1) THEN
          my_pos = "APPEND"
@@ -249,6 +401,7 @@ CONTAINS
          my_pos = "REWIND"
       END IF
       ndigits = MIN(MAX(ndigits, 1), 10)
+      do_broaden = (broaden_width > 0.0_dp)
 
       CALL get_qs_env(qs_env, dft_control=dft_control)
       nspins = dft_control%nspins
@@ -257,14 +410,23 @@ CONTAINS
       emin = 1.e10_dp
       emax = -1.e10_dp
       nmo(:) = 0
+      e_fermi(:) = 0.0_dp
+      hoco(:) = -HUGE(0.0_dp)
+      fractional_occupation = .FALSE.
       IF (kpoints%nkp /= 0) THEN
          DO ik = 1, SIZE(kpoints%kp_env)
             mos => kpoints%kp_env(ik)%kpoint_env%mos
             CPASSERT(ASSOCIATED(mos))
             DO ispin = 1, nspins
                mo_set => mos(1, ispin)
-               CALL get_mo_set(mo_set=mo_set, nmo=nmo_kp)
+               CALL get_mo_set(mo_set=mo_set, nmo=nmo_kp, mu=e_fermi(ispin))
                eigenvalues => mo_set%eigenvalues
+               occupation_numbers => mo_set%occupation_numbers
+               DO i = 1, nmo_kp
+                  IF (occupation_numbers(i) > 1.0e-10_dp) hoco(ispin) = MAX(hoco(ispin), eigenvalues(i))
+                  IF (ABS(occupation_numbers(i) - REAL(NINT(occupation_numbers(i)), KIND=dp)) > &
+                      1.0e-8_dp) fractional_occupation = .TRUE.
+               END DO
                e1 = MINVAL(eigenvalues(1:nmo_kp))
                e2 = MAXVAL(eigenvalues(1:nmo_kp))
                emin = MIN(emin, e1)
@@ -276,7 +438,20 @@ CONTAINS
       CALL para_env%min(emin)
       CALL para_env%max(emax)
       CALL para_env%max(nmo)
+      CALL para_env%max(e_fermi)
+      CALL para_env%max(hoco)
+      fractional_occupation_int = MERGE(1, 0, fractional_occupation)
+      CALL para_env%max(fractional_occupation_int)
+      fractional_occupation = (fractional_occupation_int /= 0)
+      DO ispin = 1, nspins
+         IF (hoco(ispin) < -0.5_dp*HUGE(0.0_dp)) hoco(ispin) = e_fermi(ispin)
+      END DO
 
+      IF (do_broaden) THEN
+         broaden_cutoff = broadening_cutoff(broaden_type, broaden_width)
+         emin = emin - broaden_cutoff
+         emax = emax + broaden_cutoff
+      END IF
       nhist = NINT((emax - emin)/de) + 1
       ALLOCATE (hist(nhist, nspins), occval(nhist, nspins), ehist(nhist, nspins))
       hist = 0.0_dp
@@ -291,60 +466,113 @@ CONTAINS
                mo_set => mos(1, ispin)
                occupation_numbers => mo_set%occupation_numbers
                eigenvalues => mo_set%eigenvalues
-               DO i = 1, nmo(ispin)
-                  eval = eigenvalues(i) - emin
-                  iv = NINT(eval/de) + 1
-                  CPASSERT((iv > 0) .AND. (iv <= nhist))
-                  hist(iv, ispin) = hist(iv, ispin) + wkp
-                  occval(iv, ispin) = occval(iv, ispin) + wkp*occupation_numbers(i)
-               END DO
+               IF (do_broaden) THEN
+                  DO i = 1, nmo(ispin)
+                     CALL add_broadened_peak(hist(:, ispin), occval(:, ispin), emin, de, eigenvalues(i), &
+                                             occupation_numbers(i), wkp, broaden_type, broaden_width, &
+                                             voigt_mixing)
+                  END DO
+               ELSE
+                  DO i = 1, nmo(ispin)
+                     eval = eigenvalues(i) - emin
+                     iv = NINT(eval/de) + 1
+                     CPASSERT((iv > 0) .AND. (iv <= nhist))
+                     hist(iv, ispin) = hist(iv, ispin) + wkp
+                     occval(iv, ispin) = occval(iv, ispin) + wkp*occupation_numbers(i)
+                  END DO
+               END IF
             END DO
          END DO
       END IF
       CALL para_env%sum(hist)
       CALL para_env%sum(occval)
-      DO ispin = 1, nspins
-         hist(:, ispin) = hist(:, ispin)/REAL(nmo(ispin), KIND=dp)
-      END DO
+      IF (.NOT. do_broaden) THEN
+         DO ispin = 1, nspins
+            hist(:, ispin) = hist(:, ispin)/REAL(nmo(ispin), KIND=dp)
+         END DO
+      END IF
       DO i = 1, nhist
          ehist(i, 1:nspins) = emin + (i - 1)*de
       END DO
+
+      resolved_energy_zero = dos_resolve_energy_zero(energy_zero, dft_control%smear, fractional_occupation)
+      SELECT CASE (resolved_energy_zero)
+      CASE (dos_energy_zero_absolute)
+         energy_ref(:) = 0.0_dp
+      CASE (dos_energy_zero_hoco)
+         energy_ref(:) = hoco(:)
+      CASE DEFAULT
+         energy_ref(:) = e_fermi(:)
+      END SELECT
+      energy_factor = dos_energy_scale(energy_unit)
+      density_factor = dos_density_scale(energy_unit)
+      energy_label = dos_energy_label(energy_unit)
+      zero_label = dos_energy_zero_label(resolved_energy_zero)
+      IF (energy_zero == dos_energy_zero_auto) zero_label = "AUTO -> "//TRIM(zero_label)
+      ev_factor = dos_energy_scale(dos_energy_unit_ev)
 
       my_act = "WRITE"
       iw = cp_print_key_unit_nr(logger, dft_section, "PRINT%DOS", &
                                 extension=".dos", file_position=my_pos, file_action=my_act, &
                                 file_form="FORMATTED")
       IF (iw > 0) THEN
+         WRITE (UNIT=iw, FMT="(A,I0)") "# DOS at iteration step i = ", iterstep
          IF (nspins == 2) THEN
-            WRITE (UNIT=iw, FMT="(T2,A,I0)") "# DOS at iteration step i = ", iterstep
-            WRITE (UNIT=iw, FMT="(T2,A,A)") "#  Energy[a.u.]  Alpha_Density    Occupation", &
+            WRITE (UNIT=iw, FMT="(A,2F12.6,A,2F12.6,A)") &
+               "# E(Fermi) = ", e_fermi(1:2), " a.u. = ", e_fermi(1:2)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,2F12.6,A,2F12.6,A)") &
+               "# E(HOCO)  = ", hoco(1:2), " a.u. = ", hoco(1:2)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,A)") "# Energy zero: ", TRIM(zero_label)
+            IF (do_broaden) CALL write_broadening_info(iw, broaden_type, broaden_width, voigt_mixing)
+            WRITE (UNIT=iw, FMT="(A,A)") "#  "//TRIM(energy_label)//"  Alpha_Density    Occupation", &
                "   Beta_Density     Occupation"
-            ! (F15.8,4F15.ndigits)
-            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(F15.8,4F15.", ndigits, ")"
+            ! (F15.8,4F20.ndigits)
+            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(F15.8,4F20.", ndigits, ")"
          ELSE
-            WRITE (UNIT=iw, FMT="(T2,A,I0)") "# DOS at iteration step i = ", iterstep
-            WRITE (UNIT=iw, FMT="(T2,A)") "#  Energy[a.u.]       Density     Occupation"
-            ! (F15.8,2F15.ndigits)
-            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(F15.8,2F15.", ndigits, ")"
+            WRITE (UNIT=iw, FMT="(A,F12.6,A,F12.6,A)") &
+               "# E(Fermi) = ", e_fermi(1), " a.u. = ", e_fermi(1)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,F12.6,A,F12.6,A)") &
+               "# E(HOCO)  = ", hoco(1), " a.u. = ", hoco(1)*ev_factor, " eV"
+            WRITE (UNIT=iw, FMT="(A,A)") "# Energy zero: ", TRIM(zero_label)
+            IF (do_broaden) CALL write_broadening_info(iw, broaden_type, broaden_width, voigt_mixing)
+            WRITE (UNIT=iw, FMT="(A,A)") "#  "//TRIM(energy_label), "       Density     Occupation"
+            ! (F15.8,2F20.ndigits)
+            WRITE (UNIT=fmtstr_data, FMT="(A,I0,A)") "(F15.8,2F20.", ndigits, ")"
          END IF
          DO i = 1, nhist
-            eval = emin + (i - 1)*de
+            eval = (ehist(i, 1) - energy_ref(1))*energy_factor
             IF (nspins == 2) THEN
-               ! fmtstr_data == "(F15.8,4F15.xx)"
-               WRITE (UNIT=iw, FMT=fmtstr_data) eval, hist(i, 1), occval(i, 1), &
-                  hist(i, 2), occval(i, 2)
+               ! fmtstr_data == "(F15.8,4F20.xx)"
+               IF (do_broaden) THEN
+                  WRITE (UNIT=iw, FMT=fmtstr_data) eval, hist(i, 1)*density_factor, &
+                     occval(i, 1)*density_factor, hist(i, 2)*density_factor, occval(i, 2)*density_factor
+               ELSE
+                  WRITE (UNIT=iw, FMT=fmtstr_data) eval, hist(i, 1), occval(i, 1), &
+                     hist(i, 2), occval(i, 2)
+               END IF
             ELSE
-               ! fmtstr_data == "(F15.8,2F15.xx)"
-               WRITE (UNIT=iw, FMT=fmtstr_data) eval, hist(i, 1), occval(i, 1)
+               ! fmtstr_data == "(F15.8,2F20.xx)"
+               IF (do_broaden) THEN
+                  out_density = hist(i, 1)*density_factor
+                  out_occ = occval(i, 1)*density_factor
+               ELSE
+                  out_density = hist(i, 1)
+                  out_occ = occval(i, 1)
+               END IF
+               WRITE (UNIT=iw, FMT=fmtstr_data) eval, out_density, out_occ
             END IF
          END DO
       END IF
       CALL cp_print_key_finished_output(iw, logger, dft_section, "PRINT%DOS")
-      DEALLOCATE (hist, occval)
+      DEALLOCATE (hist, occval, ehist)
+
+      ! destroy the extra k-point set if it was created
+      IF (explicit) THEN
+         CALL kpoint_release(kpoints)
+      END IF
 
       CALL timestop(handle)
 
    END SUBROUTINE calculate_dos_kp
 
 END MODULE qs_dos
-

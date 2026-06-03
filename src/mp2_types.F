@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,29 +12,25 @@
 !> \author MDB
 ! **************************************************************************************************
 MODULE mp2_types
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type,&
+                                              dbcsr_type
    USE cp_eri_mme_interface,            ONLY: cp_eri_mme_finalize,&
                                               cp_eri_mme_param
    USE cp_fm_types,                     ONLY: cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type,&
-                                              dbcsr_type
    USE hfx_types,                       ONLY: hfx_release,&
                                               hfx_type,&
                                               pair_list_element_type
    USE input_constants,                 ONLY: &
         do_eri_mme, eri_default, gw_pade_approx, kp_weights_W_auto, mp2_method_direct, &
         mp2_method_gpw, mp2_method_none, mp2_ri_optimize_basis, ri_mp2_laplace, ri_mp2_method_gpw, &
-        ri_rpa_g0w0_crossing_z_shot, ri_rpa_method_gpw, soc_none, wfc_mm_style_gemm
+        ri_rpa_g0w0_crossing_z_shot, ri_rpa_method_gpw, rpa_exchange_none, soc_none, &
+        wfc_mm_style_gemm
    USE input_section_types,             ONLY: section_vals_release,&
                                               section_vals_type
-   USE iso_c_binding,                   ONLY: c_null_ptr,&
-                                              c_ptr
    USE kinds,                           ONLY: dp
    USE kpoint_types,                    ONLY: kpoint_type
    USE libint_2c_3c,                    ONLY: libint_potential_type
-   USE local_gemm_api,                  ONLY: LOCAL_GEMM_PU_GPU,&
-                                              local_gemm_create,&
-                                              local_gemm_destroy,&
-                                              local_gemm_set_op_threshold_gpu
+   USE local_gemm_api,                  ONLY: local_gemm_ctxt_type
    USE message_passing,                 ONLY: mp_request_type
    USE qs_force_types,                  ONLY: qs_force_type
    USE qs_p_env_types,                  ONLY: qs_p_env_type
@@ -103,9 +99,9 @@ MODULE mp2_types
 
    TYPE mp2_direct_type
       LOGICAL                                            :: big_send = .FALSE.
-   END TYPE
+   END TYPE mp2_direct_type
 
-   TYPE mp2_gpw_r3d_rs_type
+   TYPE mp2_gpw_type
       REAL(KIND=dp)                                      :: eps_grid = 0.0_dp, &
                                                             eps_filter = 0.0_dp, &
                                                             eps_pgf_orb_S = 0.0_dp
@@ -113,7 +109,7 @@ MODULE mp2_types
       REAL(KIND=dp)                                      :: cutoff = 0.0_dp, &
                                                             relative_cutoff = 0.0_dp
       INTEGER                                            :: size_lattice_sum = 0
-   END TYPE mp2_gpw_r3d_rs_type
+   END TYPE mp2_gpw_type
 
    TYPE ri_mp2_type
       INTEGER                                            :: block_size = 0, &
@@ -132,15 +128,24 @@ MODULE mp2_types
                                                             minimax_quad = .FALSE., &
                                                             do_ri_g0w0 = .FALSE., &
                                                             do_admm = .FALSE., &
-                                                            do_ri_axk = .FALSE., &
                                                             do_rse = .FALSE., &
                                                             print_dgemm_info = .FALSE.
-      TYPE(dbcsr_type), POINTER                          :: mo_coeff_o => NULL(), &
+
+      ! GCC 8 has an issue with this being an ALLOCATABLE
+      TYPE(dbcsr_type), DIMENSION(:), POINTER            :: mo_coeff_o => NULL(), &
                                                             mo_coeff_v => NULL()
-      REAL(KIND=dp)                                      :: ener_axk = 0.0_dp, &
+      INTEGER                                            :: exchange_correction = rpa_exchange_none, &
+                                                            exchange_block_size = -1
+      LOGICAL                                            :: use_hfx_implementation = .FALSE.
+      REAL(KIND=dp)                                      :: ener_exchange = 0.0_dp, &
                                                             rse_corr_diag = 0.0_dp, &
                                                             rse_corr = 0.0_dp, &
                                                             scale_rpa = 0.0_dp
+
+      !LOGICAL                                            :: do_sigma = .FALSE.
+      INTEGER                                            :: sigma_param = 0.0_dp
+      REAL(KIND=dp)                                      :: e_sigma_corr = 0.0_dp
+
    END TYPE ri_rpa_type
 
    TYPE ri_rpa_im_time_type
@@ -205,7 +210,8 @@ MODULE mp2_types
       INTEGER                                            :: iter_evGW = 0, &
                                                             iter_sc_GW0 = 0
       REAL(KIND=dp)                                      :: eps_iter = 0.0_dp
-      LOGICAL                                            :: do_ri_Sigma_x = .FALSE., &
+      LOGICAL                                            :: do_hedin_shift = .FALSE., &
+                                                            do_ri_Sigma_x = .FALSE., &
                                                             do_periodic = .FALSE., &
                                                             print_self_energy = .FALSE.
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: vec_Sigma_x_minus_vxc_gw
@@ -220,10 +226,6 @@ MODULE mp2_types
                                                             do_aux_bas_gw = .FALSE.
       REAL(KIND=dp)                                      :: frac_aux_mos = 0.0_dp
       INTEGER                                            :: num_omega_points = 0
-      LOGICAL                                            :: do_bse = .FALSE.
-      INTEGER                                            :: num_z_vectors = 0, &
-                                                            max_iter_bse = 0
-      REAL(KIND=dp)                                      :: eps_min_trans = 0.0_dp
       LOGICAL                                            :: do_ic_model = .FALSE., &
                                                             print_ic_values = .FALSE.
       REAL(KIND=dp)                                      :: eps_dist = 0.0_dp
@@ -256,7 +258,9 @@ MODULE mp2_types
                                                             dos_prec = 0.0_dp, &
                                                             dos_eta = 0.0_dp
       INTEGER                                            :: max_level_self_energy = 0, &
-                                                            min_level_self_energy = 0
+                                                            min_level_self_energy = 0, &
+                                                            dos_min = 0, &
+                                                            dos_max = 0
    END TYPE ri_g0w0_type
 
    TYPE ri_basis_opt
@@ -293,21 +297,61 @@ MODULE mp2_types
       REAL(KIND=dp), DIMENSION(3, 3)                     :: mp2_virial = 0.0_dp
       REAL(dp)                                           :: eps_canonical = 0.0_dp
       LOGICAL                                            :: free_hfx_buffer = .FALSE.
-      LOGICAL                                            :: use_old_grad = .FALSE.
       INTEGER                                            :: dot_blksize = 0
       INTEGER                                            :: max_parallel_comm = 0
    END TYPE grad_util
+
+   TYPE bse_type
+      INTEGER                                            :: bse_spin_config = 0, &
+                                                            bse_diag_method = 0, &
+                                                            flag_tda = 0, &
+                                                            num_exc_en = 0, &
+                                                            num_print_exc = 0, &
+                                                            num_print_exc_descr = 0, &
+                                                            screening_method = 0, &
+                                                            num_add_start_z_space = 0, &
+                                                            fac_max_z_space = 0, &
+                                                            num_new_t = 0, &
+                                                            num_davidson_iter = 0, &
+                                                            davidson_abort_cond = 0
+      REAL(KIND=dp)                                      :: eps_res = 0.0_dp, &
+                                                            eps_exc_en = 0.0_dp, &
+                                                            eps_x = 0.0_dp, &
+                                                            screening_factor = 0.0_dp, &
+                                                            bse_cutoff_occ = 0.0_dp, &
+                                                            bse_cutoff_empty = 0.0_dp, &
+                                                            z_space_energy_cutoff = 0.0_dp
+      LOGICAL                                            :: do_bse = .FALSE., &
+                                                            bse_debug_print = .FALSE., &
+                                                            print_directional_exc_descr = .FALSE., &
+                                                            use_ks_energies = .FALSE.
+      !BSE optical spectrum
+      REAL(KIND=dp)                                      :: bse_spectrum_freq_step_size = 0.0_dp, &
+                                                            bse_spectrum_freq_start = 0.0_dp, &
+                                                            bse_spectrum_freq_end = 0.0_dp
+      LOGICAL                                            :: bse_print_spectrum = .FALSE.
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: bse_eta_spectrum_list => NULL()
+
+      !BSE NTO prints
+      LOGICAL                                            :: do_nto_analysis = .FALSE., &
+                                                            explicit_nto_list = .FALSE.
+      REAL(KIND=dp)                                      :: eps_nto_eigval = 0.0_dp, &
+                                                            eps_nto_osc_str = 0.0_dp
+      INTEGER                                            :: num_print_exc_ntos = 0
+      INTEGER, DIMENSION(:), POINTER                     :: bse_nto_state_list => NULL()
+      INTEGER, DIMENSION(:), ALLOCATABLE                 :: bse_nto_state_list_final
+   END TYPE bse_type
 
    TYPE mp2_type
       INTEGER                                            :: method = mp2_method_none
       TYPE(mp2_laplace_type)                             :: ri_laplace = mp2_laplace_type()
       TYPE(mp2_direct_type)                              :: direct_canonical = mp2_direct_type()
       TYPE(libint_potential_type)                        :: potential_parameter = libint_potential_type()
-      TYPE(mp2_gpw_r3d_rs_type)                                 :: mp2_gpw = mp2_gpw_r3d_rs_type()
+      TYPE(mp2_gpw_type)                                 :: mp2_gpw = mp2_gpw_type()
       TYPE(ri_mp2_type)                                  :: ri_mp2 = ri_mp2_type()
       TYPE(ri_rpa_type)                                  :: ri_rpa = ri_rpa_type()
       ! There is a bug with some older compilers preventing requiring an explicit initialization of allocatable components
-#if __GNUC__ < 9 || (__GNUC__ == 9 && __GNUC_MINOR__ < 5)
+#if defined(FTN_NO_DEFAULT_INIT)
       TYPE(ri_rpa_im_time_type)                          :: ri_rpa_im_time = ri_rpa_im_time_type(Eigenval_Gamma=NULL(), &
                                                                                                  wkp_V=NULL(), &
                                                                                                  starts_array_mc_RI=NULL(), &
@@ -330,11 +374,13 @@ MODULE mp2_types
                                                                                 mo_coeff_o=NULL(), &
                                                                                 mo_coeff_v=NULL(), &
                                                                                 P_mo=NULL(), W_mo=NULL(), L_jb=NULL())
+      TYPE(bse_type)                                     :: bse = bse_type(bse_nto_state_list_final=NULL())
 #else
       TYPE(ri_rpa_im_time_type)                          :: ri_rpa_im_time = ri_rpa_im_time_type()
       TYPE(ri_g0w0_type)                                 :: ri_g0w0 = ri_g0w0_type()
       TYPE(ri_basis_opt)                                 :: ri_opt_param = ri_basis_opt()
       TYPE(grad_util)                                    :: ri_grad = grad_util()
+      TYPE(bse_type)                                     :: bse = bse_type()
 #endif
       REAL(KIND=dp)                                      :: mp2_memory = 0.0_dp, &
                                                             scale_S = 0.0_dp, &
@@ -351,11 +397,13 @@ MODULE mp2_types
       TYPE(cp_eri_mme_param), POINTER                    :: eri_mme_param => NULL()
       INTEGER, DIMENSION(:), POINTER                     :: eri_blksize => NULL()
       LOGICAL                                            :: do_svd = .FALSE.
+      REAL(KIND=dp)                                      :: eps_svd = -1.0_dp
       REAL(KIND=dp)                                      :: eps_range = 0.0_dp
       TYPE(libint_potential_type)                        :: ri_metric = libint_potential_type()
-      TYPE(C_ptr)                                        :: local_gemm_ctx = C_NULL_PTR
+      TYPE(local_gemm_ctxt_type)                         :: local_gemm_ctx = local_gemm_ctxt_type()
       REAL(dp)                                           :: e_gap = 0.0_dp, &
                                                             e_range = 0.0_dp
+      LOGICAL                                            :: ri_aux_auto_generated = .FALSE.
    END TYPE mp2_type
 
    TYPE integ_mat_buffer_type
@@ -400,7 +448,7 @@ CONTAINS
       IF (ASSOCIATED(mp2_env%ri_rpa%xc_section_aux)) CALL section_vals_release(mp2_env%ri_rpa%xc_section_aux)
       IF (ASSOCIATED(mp2_env%ri_rpa%xc_section_primary)) CALL section_vals_release(mp2_env%ri_rpa%xc_section_primary)
 
-      IF (mp2_env%eri_method .EQ. do_eri_mme) CALL cp_eri_mme_finalize(mp2_env%eri_mme_param)
+      IF (mp2_env%eri_method == do_eri_mme) CALL cp_eri_mme_finalize(mp2_env%eri_mme_param)
       IF (ASSOCIATED(mp2_env%eri_mme_param)) DEALLOCATE (mp2_env%eri_mme_param)
       IF (ASSOCIATED(mp2_env%ri_rpa_im_time%tau_tj)) DEALLOCATE (mp2_env%ri_rpa_im_time%tau_tj)
       IF (ASSOCIATED(mp2_env%ri_rpa_im_time%tau_wj)) DEALLOCATE (mp2_env%ri_rpa_im_time%tau_wj)
@@ -409,7 +457,7 @@ CONTAINS
       IF (ASSOCIATED(mp2_env%ri_rpa_im_time%weights_cos_tf_t_to_w)) DEALLOCATE (mp2_env%ri_rpa_im_time%weights_cos_tf_t_to_w)
       IF (ASSOCIATED(mp2_env%ri_rpa_im_time%weights_cos_tf_w_to_t)) DEALLOCATE (mp2_env%ri_rpa_im_time%weights_cos_tf_w_to_t)
 
-      CALL local_gemm_destroy(mp2_env%local_gemm_ctx)
+      CALL mp2_env%local_gemm_ctx%destroy()
 
       CALL timestop(handle)
 
@@ -431,12 +479,6 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(mp2_env))
 
       ALLOCATE (mp2_env)
-
-      ! these two functions are empty if spla is build without gpu support and
-      ! OFFLOAD_GEMM is not given at compilation time
-
-      CALL local_gemm_create(mp2_env%local_gemm_ctx, LOCAL_GEMM_PU_GPU)
-      CALL local_gemm_set_op_threshold_gpu(mp2_env%local_gemm_ctx, 128*128*128*2)
 
       NULLIFY (mp2_env%ri_rpa%x_data)
 

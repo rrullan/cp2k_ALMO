@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,6 +15,7 @@ MODULE molecular_states
                                               cite_reference
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_type
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply
    USE cp_fm_diag,                      ONLY: choose_eigv_solver
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -34,7 +35,6 @@ MODULE molecular_states
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE dbcsr_api,                       ONLY: dbcsr_type
    USE input_section_types,             ONLY: section_get_ivals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -155,7 +155,7 @@ CONTAINS
       END IF
       CALL section_vals_val_get(loc_print_section, "MOLECULAR_STATES%MARK_STATES", &
                                 n_rep_val=n_rep)
-      IF (n_rep .GT. 0) THEN
+      IF (n_rep > 0) THEN
          ALLOCATE (mark_states(2, n_rep))
          IF (.NOT. ASSOCIATED(marked_states)) THEN
             ALLOCATE (marked_states(n_rep))

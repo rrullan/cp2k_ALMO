@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -21,6 +21,17 @@ MODULE dbt_array_list_methods
    USE dbt_allocate_wrap, ONLY: allocate_any
 
 #include "../base/base_uses.f90"
+#if defined(__LIBXSMM)
+#  include "libxsmm_version.h"
+#endif
+
+#if CPVERSION_CHECK(1, 11, <=, LIBXSMM_CONFIG_VERSION_MAJOR, LIBXSMM_CONFIG_VERSION_MINOR)
+   USE libxsmm, ONLY: libxsmm_diff
+#  define PURE_ARRAY_EQ
+#else
+#  define PURE_ARRAY_EQ PURE
+#endif
+
    IMPLICIT NONE
    PRIVATE
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'dbt_array_list_methods'
@@ -101,7 +112,7 @@ CONTAINS
       size_all = 0
 
       #:for dim in range(1, maxdim+1)
-         IF (ndata .GE. ${dim}$) THEN
+         IF (ndata >= ${dim}$) THEN
             CPASSERT(PRESENT(data_${dim}$))
             size_all = size_all + SIZE(data_${dim}$)
          END IF
@@ -114,7 +125,7 @@ CONTAINS
       list%ptr(1) = ptr
 
       #:for dim in range(1, maxdim+1)
-         IF (ndata .GE. ${dim}$) THEN
+         IF (ndata >= ${dim}$) THEN
             list%col_data(ptr:ptr + SIZE(data_${dim}$) - 1) = data_${dim}$ (:)
             ptr = ptr + SIZE(data_${dim}$)
             list%ptr(${dim+1}$) = ptr
@@ -319,14 +330,17 @@ CONTAINS
 !> \brief check whether two arrays are equal
 !> \author Patrick Seewald
 ! **************************************************************************************************
-   PURE FUNCTION array_eq_i(arr1, arr2)
+   PURE_ARRAY_EQ FUNCTION array_eq_i(arr1, arr2)
       INTEGER, INTENT(IN), DIMENSION(:) :: arr1
       INTEGER, INTENT(IN), DIMENSION(:) :: arr2
       LOGICAL                           :: array_eq_i
 
+#if CPVERSION_CHECK(1, 11, <=, LIBXSMM_CONFIG_VERSION_MAJOR, LIBXSMM_CONFIG_VERSION_MINOR)
+      array_eq_i = .NOT. libxsmm_diff(arr1, arr2)
+#else
       array_eq_i = .FALSE.
-      IF (SIZE(arr1) .EQ. SIZE(arr2)) array_eq_i = ALL(arr1 == arr2)
-
+      IF (SIZE(arr1) == SIZE(arr2)) array_eq_i = ALL(arr1 == arr2)
+#endif
    END FUNCTION
 
 END MODULE dbt_array_list_methods

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,6 +22,13 @@ MODULE almo_scf_qs
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_complete_redistribute, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, &
+        dbcsr_distribution_get, dbcsr_distribution_new, dbcsr_distribution_release, &
+        dbcsr_distribution_type, dbcsr_filter, dbcsr_finalize, dbcsr_get_block_p, dbcsr_get_info, &
+        dbcsr_get_num_blocks, dbcsr_get_stored_coordinates, dbcsr_multiply, dbcsr_p_type, &
+        dbcsr_put_block, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry, &
+        dbcsr_work_create
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -34,13 +41,6 @@ MODULE almo_scf_qs
                                               cp_logger_get_default_unit_nr,&
                                               cp_logger_type
    USE cp_units,                        ONLY: cp_unit_to_cp2k
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_complete_redistribute, dbcsr_copy, dbcsr_copy_into_existing, dbcsr_create, &
-        dbcsr_desymmetrize, dbcsr_distribution_get, dbcsr_distribution_new, &
-        dbcsr_distribution_release, dbcsr_distribution_type, dbcsr_filter, dbcsr_finalize, &
-        dbcsr_get_block_p, dbcsr_get_info, dbcsr_get_num_blocks, dbcsr_get_stored_coordinates, &
-        dbcsr_multiply, dbcsr_nblkcols_total, dbcsr_nblkrows_total, dbcsr_p_type, dbcsr_release, &
-        dbcsr_reserve_block2d, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry, dbcsr_work_create
    USE input_constants,                 ONLY: almo_constraint_ao_overlap,&
                                               almo_constraint_block_diagonal,&
                                               almo_constraint_distance,&
@@ -128,10 +128,10 @@ CONTAINS
       INTEGER                                            :: dimen, handle, hold, iatom, iblock_col, &
                                                             iblock_row, imol, mynode, natoms, &
                                                             nblkrows_tot, nlength, nmols, row
-      INTEGER, DIMENSION(:), POINTER :: blk_distr, blk_sizes, block_sizes_new, col_distr_new, &
-         col_sizes_new, distr_new_array, row_distr_new, row_sizes_new
+      INTEGER, DIMENSION(:), POINTER :: blk_distr, blk_sizes, block_sizes_new, col_blk_size, &
+         col_distr_new, col_sizes_new, distr_new_array, row_blk_size, row_distr_new, row_sizes_new
       LOGICAL                                            :: active, one_dim_is_mo, tr
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: p_new_block
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: new_block
       TYPE(dbcsr_distribution_type)                      :: dist_new, dist_qs
 
 ! dimension size: AO, MO, etc
@@ -286,12 +286,12 @@ CONTAINS
 
          CALL dbcsr_distribution_get(dist_new, mynode=mynode)
          CALL dbcsr_work_create(matrix_new, work_mutable=.TRUE.)
-
+         CALL dbcsr_get_info(matrix_new, nblkrows_total=nblkrows_tot, &
+                             row_blk_size=row_blk_size, col_blk_size=col_blk_size)
          ! startQQQ - this part of the code scales quadratically
          ! therefore it is replaced with a less general but linear scaling algorithm below
          ! the quadratic algorithm is kept to be re-written later
-         !QQQnblkrows_tot = dbcsr_nblkrows_total(matrix_new)
-         !QQQnblkcols_tot = dbcsr_nblkcols_total(matrix_new)
+         !QQQCALL dbcsr_get_info(matrix_new, nblkrows_total=nblkrows_tot, nblkcols_total=nblkcols_tot)
          !QQQDO row = 1, nblkrows_tot
          !QQQ   DO col = 1, nblkcols_tot
          !QQQ      tr = .FALSE.
@@ -299,7 +299,7 @@ CONTAINS
          !QQQ      iblock_col = col
          !QQQ      CALL dbcsr_get_stored_coordinates(matrix_new, iblock_row, iblock_col, tr, hold)
 
-         !QQQ      IF(hold.EQ.mynode) THEN
+         !QQQ      IF(hold==mynode) THEN
          !QQQ
          !QQQ         ! RZK-warning replace with a function which says if this
          !QQQ         ! distribution block is active or not
@@ -334,10 +334,10 @@ CONTAINS
          !QQQ         if (domain_row==domain_col) active=.true.
 
          !QQQ         IF (active) THEN
-         !QQQ            NULLIFY (p_new_block)
-         !QQQ            CALL dbcsr_reserve_block2d(matrix_new, iblock_row, iblock_col, p_new_block)
-         !QQQ            CPPostcondition(ASSOCIATED(p_new_block),cp_failure_level,routineP,failure)
-         !QQQ            p_new_block(:,:) = 1.0_dp
+         !QQQ            ALLOCATE (new_block(row_blk_size(iblock_row), col_blk_size(iblock_col)))
+         !QQQ            new_block(:, :) = 1.0_dp
+         !QQQ            CALL dbcsr_put_block(matrix_new, iblock_row, iblock_col, new_block)
+         !QQQ            DEALLOCATE (new_block)
          !QQQ         ENDIF
 
          !QQQ      ENDIF ! mynode
@@ -347,14 +347,13 @@ CONTAINS
          ! endQQQ - end of the quadratic part
          ! start linear-scaling replacement:
          ! works only for molecular blocks AND molecular distributions
-         nblkrows_tot = dbcsr_nblkrows_total(matrix_new)
          DO row = 1, nblkrows_tot
             tr = .FALSE.
             iblock_row = row
             iblock_col = row
             CALL dbcsr_get_stored_coordinates(matrix_new, iblock_row, iblock_col, hold)
 
-            IF (hold .EQ. mynode) THEN
+            IF (hold == mynode) THEN
 
                active = .TRUE.
 
@@ -391,10 +390,10 @@ CONTAINS
                END IF
 
                IF (active) THEN
-                  NULLIFY (p_new_block)
-                  CALL dbcsr_reserve_block2d(matrix_new, iblock_row, iblock_col, p_new_block)
-                  CPASSERT(ASSOCIATED(p_new_block))
-                  p_new_block(:, :) = 1.0_dp
+                  ALLOCATE (new_block(row_blk_size(iblock_row), col_blk_size(iblock_col)))
+                  new_block(:, :) = 1.0_dp
+                  CALL dbcsr_put_block(matrix_new, iblock_row, iblock_col, new_block)
+                  DEALLOCATE (new_block)
                END IF
 
             END IF ! mynode
@@ -414,16 +413,14 @@ CONTAINS
 !> \param matrix_qs ...
 !> \param matrix_almo ...
 !> \param mat_distr_aos ...
-!> \param keep_sparsity ...
 !> \par History
 !>       2011.06 created [Rustam Z Khaliullin]
 !> \author Rustam Z Khaliullin
 ! **************************************************************************************************
-   SUBROUTINE matrix_qs_to_almo(matrix_qs, matrix_almo, mat_distr_aos, keep_sparsity)
+   SUBROUTINE matrix_qs_to_almo(matrix_qs, matrix_almo, mat_distr_aos)
 
       TYPE(dbcsr_type)                                   :: matrix_qs, matrix_almo
       INTEGER                                            :: mat_distr_aos
-      LOGICAL, INTENT(IN)                                :: keep_sparsity
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'matrix_qs_to_almo'
 
@@ -436,12 +433,10 @@ CONTAINS
       SELECT CASE (mat_distr_aos)
       CASE (almo_mat_distr_atomic)
          ! automatic data_type conversion
-         CALL dbcsr_copy(matrix_almo, matrix_qs, &
-                         keep_sparsity=keep_sparsity)
+         CALL dbcsr_copy(matrix_almo, matrix_qs)
       CASE (almo_mat_distr_molecular)
          ! desymmetrize the qs matrix
-         CALL dbcsr_create(matrix_qs_nosym, template=matrix_qs, &
-                           matrix_type=dbcsr_type_no_symmetry)
+         CALL dbcsr_create(matrix_qs_nosym, template=matrix_qs, matrix_type=dbcsr_type_no_symmetry)
          CALL dbcsr_desymmetrize(matrix_qs, matrix_qs_nosym)
 
          ! perform the magic complete_redistribute
@@ -452,8 +447,7 @@ CONTAINS
          ! complete_redistribute. RZK-warning it should be later corrected by calling
          ! dbcsr_set to 0.0 from within complete_redistribute
          CALL dbcsr_set(matrix_almo, 0.0_dp)
-         CALL dbcsr_complete_redistribute(matrix_qs_nosym, matrix_almo, &
-                                          keep_sparsity=keep_sparsity); 
+         CALL dbcsr_complete_redistribute(matrix_qs_nosym, matrix_almo)
          CALL dbcsr_release(matrix_qs_nosym)
 
       CASE DEFAULT
@@ -480,16 +474,20 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'matrix_almo_to_qs'
 
       INTEGER                                            :: handle
+      TYPE(dbcsr_type)                                   :: matrix_almo_redist
 
       CALL timeset(routineN, handle)
       ! RZK-warning if it's not a N(AO)xN(AO) matrix then stop
 
       SELECT CASE (mat_distr_aos)
       CASE (almo_mat_distr_atomic)
-         CALL dbcsr_copy_into_existing(matrix_qs, matrix_almo)
+         CALL dbcsr_copy(matrix_qs, matrix_almo, keep_sparsity=.TRUE.)
       CASE (almo_mat_distr_molecular)
+         CALL dbcsr_create(matrix_almo_redist, template=matrix_qs)
+         CALL dbcsr_complete_redistribute(matrix_almo, matrix_almo_redist)
          CALL dbcsr_set(matrix_qs, 0.0_dp)
-         CALL dbcsr_complete_redistribute(matrix_almo, matrix_qs, keep_sparsity=.TRUE.)
+         CALL dbcsr_copy(matrix_qs, matrix_almo_redist, keep_sparsity=.TRUE.)
+         CALL dbcsr_release(matrix_almo_redist)
       CASE DEFAULT
          CPABORT("")
       END SELECT
@@ -553,8 +551,7 @@ CONTAINS
 
       ! copy to ALMO
       DO ispin = 1, nspin
-         CALL matrix_qs_to_almo(matrix_qs_ks(ispin)%matrix, &
-                                matrix_ks(ispin), mat_distr_aos, .FALSE.)
+         CALL matrix_qs_to_almo(matrix_qs_ks(ispin)%matrix, matrix_ks(ispin), mat_distr_aos)
          CALL dbcsr_filter(matrix_ks(ispin), eps_filter)
       END DO
 
@@ -788,9 +785,7 @@ CONTAINS
       ! get KS matrix from the QS env and convert to the ALMO format
       CALL get_qs_env(qs_env, matrix_ks=matrix_qs_ks)
       DO ispin = 1, nspins
-         CALL matrix_qs_to_almo(matrix_qs_ks(ispin)%matrix, &
-                                matrix_ks(ispin), &
-                                mat_distr_aos, .FALSE.)
+         CALL matrix_qs_to_almo(matrix_qs_ks(ispin)%matrix, matrix_ks(ispin), mat_distr_aos)
          CALL dbcsr_filter(matrix_ks(ispin), eps_filter)
       END DO
 
@@ -857,14 +852,16 @@ CONTAINS
          last_atom_of_molecule, list_length_cpu, list_offset_cpu, local_list, offset_for_cpu
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: domain_grid, domain_neighbor_list, &
                                                             domain_neighbor_list_excessive
+      INTEGER, DIMENSION(:), POINTER                     :: col_blk_size, row_blk_size
       LOGICAL                                            :: already_listed, block_active, &
                                                             delayed_increment, found, &
                                                             max_neig_fails, tr
       REAL(KIND=dp)                                      :: contact1_radius, contact2_radius, &
                                                             distance, distance_squared, overlap, &
                                                             r0, r1, s0, s1, trial_distance_squared
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: new_block
       REAL(KIND=dp), DIMENSION(3)                        :: rab
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: p_new_block
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: p_old_block
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_distribution_type)                      :: dist
@@ -913,7 +910,7 @@ CONTAINS
                         matrix_type=dbcsr_type_no_symmetry)
       CALL dbcsr_get_info(almo_scf_env%matrix_s(1), &
                           matrix_type=sym)
-      IF (sym .EQ. dbcsr_type_no_symmetry) THEN
+      IF (sym == dbcsr_type_no_symmetry) THEN
          CALL dbcsr_copy(matrix_s_sym, almo_scf_env%matrix_s(1))
       ELSE
          CALL dbcsr_desymmetrize(almo_scf_env%matrix_s(1), &
@@ -931,19 +928,15 @@ CONTAINS
                               matrix_qs=matrix_s(1)%matrix, &
                               almo_scf_env=almo_scf_env, &
                               name_new="T_QUENCHER", &
-                              size_keys=(/almo_mat_dim_aobasis, almo_mat_dim_occ/), &
+                              size_keys=[almo_mat_dim_aobasis, almo_mat_dim_occ], &
                               symmetry_new=dbcsr_type_no_symmetry, &
                               spin_key=ispin, &
                               init_domains=.FALSE.)
 
       ! initialize distance quencher
-      CALL dbcsr_work_create(almo_scf_env%quench_t(ispin), &
-                             work_mutable=.TRUE.)
-
-      nblkrows_tot = dbcsr_nblkrows_total(almo_scf_env%quench_t(ispin))
-      nblkcols_tot = dbcsr_nblkcols_total(almo_scf_env%quench_t(ispin))
-
-      CALL dbcsr_get_info(almo_scf_env%quench_t(ispin), distribution=dist)
+      CALL dbcsr_work_create(almo_scf_env%quench_t(ispin), work_mutable=.TRUE.)
+      CALL dbcsr_get_info(almo_scf_env%quench_t(ispin), distribution=dist, &
+                          nblkrows_total=nblkrows_tot, nblkcols_total=nblkcols_tot)
       CALL dbcsr_distribution_get(dist, numnodes=nNodes, group=GroupID, mynode=mynode)
       CALL group%set_handle(groupid)
 
@@ -1008,7 +1001,7 @@ CONTAINS
          ! add to the list
          current_number_neighbors(idomain2) = current_number_neighbors(idomain2) + 1
          ! add j,i with i,j
-         IF (idomain2 .NE. jdomain2) THEN
+         IF (idomain2 /= jdomain2) THEN
             current_number_neighbors(jdomain2) = current_number_neighbors(jdomain2) + 1
          END IF
       END DO
@@ -1027,7 +1020,7 @@ CONTAINS
          jdomain2 = almo_scf_env%domain_index_of_atom(jatom2)
          already_listed = .FALSE.
          DO ineighbor = 1, current_number_neighbors(idomain2)
-            IF (domain_neighbor_list_excessive(idomain2, ineighbor) .EQ. jdomain2) THEN
+            IF (domain_neighbor_list_excessive(idomain2, ineighbor) == jdomain2) THEN
                already_listed = .TRUE.
                EXIT
             END IF
@@ -1037,7 +1030,7 @@ CONTAINS
             current_number_neighbors(idomain2) = current_number_neighbors(idomain2) + 1
             domain_neighbor_list_excessive(idomain2, current_number_neighbors(idomain2)) = jdomain2
             ! add j,i with i,j
-            IF (idomain2 .NE. jdomain2) THEN
+            IF (idomain2 /= jdomain2) THEN
                current_number_neighbors(jdomain2) = current_number_neighbors(jdomain2) + 1
                domain_neighbor_list_excessive(jdomain2, current_number_neighbors(jdomain2)) = idomain2
             END IF
@@ -1060,6 +1053,8 @@ CONTAINS
       ! RZK-warning intermediate [0,1] quencher values are ill-defined
       ! for molecules (not continuous and conceptually inadequate)
 
+      CALL dbcsr_get_info(almo_scf_env%quench_t(ispin), &
+                          row_blk_size=row_blk_size, col_blk_size=col_blk_size)
       ! O(N) loop over domain pairs
       DO row = 1, nblkrows_tot
          DO col = 1, current_number_neighbors(row)
@@ -1069,7 +1064,7 @@ CONTAINS
             CALL dbcsr_get_stored_coordinates(almo_scf_env%quench_t(ispin), &
                                               iblock_row, iblock_col, hold)
 
-            IF (hold .EQ. mynode) THEN
+            IF (hold == mynode) THEN
 
                ! Translate indices of distribution blocks to indices of domain blocks
                ! Rows are AOs
@@ -1120,13 +1115,12 @@ CONTAINS
 
                   IF (block_active) THEN
 
-                     NULLIFY (p_new_block)
-                     CALL dbcsr_reserve_block2d(almo_scf_env%quench_t(ispin), &
-                                                iblock_row, iblock_col, p_new_block)
-                     CPASSERT(ASSOCIATED(p_new_block))
-                     p_new_block(:, :) = 1.0_dp
+                     ALLOCATE (new_block(row_blk_size(iblock_row), col_blk_size(iblock_col)))
+                     new_block(:, :) = 1.0_dp
+                     CALL dbcsr_put_block(almo_scf_env%quench_t(ispin), iblock_row, iblock_col, new_block)
+                     DEALLOCATE (new_block)
 
-                     IF (domain_map_local_entries .GE. max_domain_neighbors*almo_scf_env%ndomains) THEN
+                     IF (domain_map_local_entries >= max_domain_neighbors*almo_scf_env%ndomains) THEN
                         CPABORT("weird... max_domain_neighbors is exceeded")
                      END IF
                      almo_scf_env%domain_map(ispin)%pairs(domain_map_local_entries + 1, 1) = iblock_row
@@ -1146,12 +1140,11 @@ CONTAINS
                         ! ao domains are molecular / electron groups are molecular
 
                         ! compute the maximum overlap between the atoms of the two molecules
-                        CALL dbcsr_get_block_p(matrix_s_sym, &
-                                               iblock_row, iblock_col, p_new_block, found)
+                        CALL dbcsr_get_block_p(matrix_s_sym, iblock_row, iblock_col, p_old_block, found)
                         IF (found) THEN
                            !   CPErrorMessage(cp_failure_level,routineP,"S block not found")
                            !   CPPrecondition(.FALSE.,cp_failure_level,routineP,failure)
-                           overlap = MAXVAL(ABS(p_new_block))
+                           overlap = MAXVAL(ABS(p_old_block))
                         ELSE
                            overlap = 0.0_dp
                         END IF
@@ -1177,12 +1170,11 @@ CONTAINS
 
                         ! ao domains are atomic / electron groups are atomic
                         ! compute max overlap between atoms: domain_row and domain_col
-                        CALL dbcsr_get_block_p(matrix_s_sym, &
-                                               iblock_row, iblock_col, p_new_block, found)
+                        CALL dbcsr_get_block_p(matrix_s_sym, iblock_row, iblock_col, p_old_block, found)
                         IF (found) THEN
                            !   CPErrorMessage(cp_failure_level,routineP,"S block not found")
                            !   CPPrecondition(.FALSE.,cp_failure_level,routineP,failure)
-                           overlap = MAXVAL(ABS(p_new_block))
+                           overlap = MAXVAL(ABS(p_old_block))
                         ELSE
                            overlap = 0.0_dp
                         END IF
@@ -1193,45 +1185,45 @@ CONTAINS
 
                   s0 = -LOG10(ABS(almo_scf_env%quencher_s0))
                   s1 = -LOG10(ABS(almo_scf_env%quencher_s1))
-                  IF (overlap .EQ. 0.0_dp) THEN
+                  IF (overlap == 0.0_dp) THEN
                      overlap = -LOG10(ABS(almo_scf_env%eps_filter)) + 100.0_dp
                   ELSE
                      overlap = -LOG10(overlap)
                   END IF
-                  IF (s0 .LT. 0.0_dp) THEN
+                  IF (s0 < 0.0_dp) THEN
                      CPABORT("S0 is less than zero")
                   END IF
-                  IF (s1 .LE. 0.0_dp) THEN
+                  IF (s1 <= 0.0_dp) THEN
                      CPABORT("S1 is less than or equal to zero")
                   END IF
-                  IF (s0 .GE. s1) THEN
+                  IF (s0 >= s1) THEN
                      CPABORT("S0 is greater than or equal to S1")
                   END IF
 
                   ! Fill in non-zero blocks if AOs are close to the electron center
-                  IF (overlap .LT. s1) THEN
-                     NULLIFY (p_new_block)
-                     CALL dbcsr_reserve_block2d(almo_scf_env%quench_t(ispin), &
-                                                iblock_row, iblock_col, p_new_block)
-                     CPASSERT(ASSOCIATED(p_new_block))
-                     IF (overlap .LE. s0) THEN
-                        p_new_block(:, :) = 1.0_dp
+                  IF (overlap < s1) THEN
+                     ALLOCATE (new_block(row_blk_size(iblock_row), col_blk_size(iblock_col)))
+                     IF (overlap <= s0) THEN
+                        new_block(:, :) = 1.0_dp
                         !WRITE(*,'(A15,2I7,3F8.3,E11.3)') "INTRA-BLOCKS: ",&
-                        !   iblock_col, iblock_row, s0, s1, overlap, p_new_block(1,1)
+                        !   iblock_col, iblock_row, s0, s1, overlap, new_block(1,1)
                      ELSE
-                        p_new_block(:, :) = 1.0_dp/(1.0_dp + EXP(-(s0 - s1)/(s0 - overlap) - (s0 - s1)/(overlap - s1)))
+                        new_block(:, :) = 1.0_dp/(1.0_dp + EXP(-(s0 - s1)/(s0 - overlap) - (s0 - s1)/(overlap - s1)))
                         !WRITE(*,'(A15,2I7,3F8.3,E11.3)') "INTER-BLOCKS: ",&
-                        !   iblock_col, iblock_row, s0, s1, overlap, p_new_block(1,1)
+                        !   iblock_col, iblock_row, s0, s1, overlap, new_block(1,1)
                      END IF
 
-                     IF (ABS(p_new_block(1, 1)) .GT. ABS(almo_scf_env%eps_filter)) THEN
-                        IF (domain_map_local_entries .GE. max_domain_neighbors*almo_scf_env%ndomains) THEN
+                     IF (ABS(new_block(1, 1)) > ABS(almo_scf_env%eps_filter)) THEN
+                        IF (domain_map_local_entries >= max_domain_neighbors*almo_scf_env%ndomains) THEN
                            CPABORT("weird... max_domain_neighbors is exceeded")
                         END IF
                         almo_scf_env%domain_map(ispin)%pairs(domain_map_local_entries + 1, 1) = iblock_row
                         almo_scf_env%domain_map(ispin)%pairs(domain_map_local_entries + 1, 2) = iblock_col
                         domain_map_local_entries = domain_map_local_entries + 1
                      END IF
+
+                     CALL dbcsr_put_block(almo_scf_env%quench_t(ispin), iblock_row, iblock_col, new_block)
+                     DEALLOCATE (new_block)
 
                   END IF
 
@@ -1260,14 +1252,14 @@ CONTAINS
                               DO jatom = first_atom_of_molecule(domain_col), last_atom_of_molecule(domain_col)
                                  rab(:) = pbc(particle_set(iatom)%r(:), particle_set(jatom)%r(:), cell)
                                  trial_distance_squared = rab(1)*rab(1) + rab(2)*rab(2) + rab(3)*rab(3)
-                                 IF (trial_distance_squared .LT. distance_squared) THEN
+                                 IF (trial_distance_squared < distance_squared) THEN
                                     distance_squared = trial_distance_squared
                                     contact_atom_1 = iatom
                                     contact_atom_2 = jatom
                                  END IF
                               END DO ! jatom
                            END DO ! iatom
-                           CPASSERT(contact_atom_1 .GT. 0)
+                           CPASSERT(contact_atom_1 > 0)
                            distance = SQRT(distance_squared)
                         END IF
 
@@ -1328,38 +1320,35 @@ CONTAINS
                   r1 = almo_scf_env%quencher_r1_factor*(contact1_radius + contact2_radius)
                   !+almo_scf_env%quencher_r1_shift
 
-                  IF (r0 .LT. 0.0_dp) THEN
+                  IF (r0 < 0.0_dp) THEN
                      CPABORT("R0 is less than zero")
                   END IF
-                  IF (r1 .LE. 0.0_dp) THEN
+                  IF (r1 <= 0.0_dp) THEN
                      CPABORT("R1 is less than or equal to zero")
                   END IF
-                  IF (r0 .GT. r1) THEN
+                  IF (r0 > r1) THEN
                      CPABORT("R0 is greater than or equal to R1")
                   END IF
 
                   ! Fill in non-zero blocks if AOs are close to the electron center
-                  IF (distance .LT. r1) THEN
-                     NULLIFY (p_new_block)
-                     CALL dbcsr_reserve_block2d(almo_scf_env%quench_t(ispin), &
-                                                iblock_row, iblock_col, p_new_block)
-                     CPASSERT(ASSOCIATED(p_new_block))
-                     IF (distance .LE. r0) THEN
-                        p_new_block(:, :) = 1.0_dp
+                  IF (distance < r1) THEN
+                     ALLOCATE (new_block(row_blk_size(iblock_row), col_blk_size(iblock_col)))
+                     IF (distance <= r0) THEN
+                        new_block(:, :) = 1.0_dp
                         !WRITE(*,'(A15,2I7,5F8.3,E11.3)') "INTRA-BLOCKS: ",&
                         !   iblock_col, iblock_row, contact1_radius,&
-                        !   contact2_radius, r0, r1, distance, p_new_block(1,1)
+                        !   contact2_radius, r0, r1, distance, new_block(1,1)
                      ELSE
                         ! remove the intermediate values from the quencher temporarily
                         CPABORT("")
-                        p_new_block(:, :) = 1.0_dp/(1.0_dp + EXP((r1 - r0)/(r0 - distance) + (r1 - r0)/(r1 - distance)))
+                        new_block(:, :) = 1.0_dp/(1.0_dp + EXP((r1 - r0)/(r0 - distance) + (r1 - r0)/(r1 - distance)))
                         !WRITE(*,'(A15,2I7,5F8.3,E11.3)') "INTER-BLOCKS: ",&
                         !   iblock_col, iblock_row, contact1_radius,&
-                        !   contact2_radius, r0, r1, distance, p_new_block(1,1)
+                        !   contact2_radius, r0, r1, distance, new_block(1,1)
                      END IF
 
-                     IF (ABS(p_new_block(1, 1)) .GT. ABS(almo_scf_env%eps_filter)) THEN
-                        IF (domain_map_local_entries .GE. max_domain_neighbors*almo_scf_env%ndomains) THEN
+                     IF (ABS(new_block(1, 1)) > ABS(almo_scf_env%eps_filter)) THEN
+                        IF (domain_map_local_entries >= max_domain_neighbors*almo_scf_env%ndomains) THEN
                            CPABORT("weird... max_domain_neighbors is exceeded")
                         END IF
                         almo_scf_env%domain_map(ispin)%pairs(domain_map_local_entries + 1, 1) = iblock_row
@@ -1367,6 +1356,8 @@ CONTAINS
                         domain_map_local_entries = domain_map_local_entries + 1
                      END IF
 
+                     CALL dbcsr_put_block(almo_scf_env%quench_t(ispin), iblock_row, iblock_col, new_block)
+                     DEALLOCATE (new_block)
                   END IF
 
                CASE DEFAULT
@@ -1389,7 +1380,7 @@ CONTAINS
 
       ! check that both domain_map and quench_t have the same number of entries
       nblks = dbcsr_get_num_blocks(almo_scf_env%quench_t(ispin))
-      IF (nblks .NE. domain_map_local_entries) THEN
+      IF (nblks /= domain_map_local_entries) THEN
          CPABORT("number of blocks is wrong")
       END IF
 
@@ -1443,7 +1434,7 @@ CONTAINS
             ! get the neighbor
             ineig = domain_map_global(2*(ientry - 1) + 1)
             ! check boundaries
-            IF (domain_grid(grid1, 0) .GT. max_neig) THEN
+            IF (domain_grid(grid1, 0) > max_neig) THEN
                ! this neighbor will overstep the boundaries
                ! stop the trial and increase the max number of neighbors
                DEALLOCATE (domain_grid)
@@ -1455,14 +1446,14 @@ CONTAINS
             delayed_increment = .FALSE.
             DO igrid = 1, domain_grid(grid1, 0)
                ! compare the current neighbor with that already in the 'book'
-               IF (ineig .LT. domain_grid(grid1, igrid)) THEN
+               IF (ineig < domain_grid(grid1, igrid)) THEN
                   ! if this one is smaller then insert it here and pick up the one
                   ! from the book to continue inserting
                   neig_temp = ineig
                   ineig = domain_grid(grid1, igrid)
                   domain_grid(grid1, igrid) = neig_temp
                ELSE
-                  IF (domain_grid(grid1, igrid) .EQ. 0) THEN
+                  IF (domain_grid(grid1, igrid) == 0) THEN
                      ! got the empty slot now - insert the record
                      domain_grid(grid1, igrid) = ineig
                      ! increase the record counter but do it outside the loop
@@ -1493,7 +1484,7 @@ CONTAINS
       DEALLOCATE (domain_grid)
 
       !ENDDO ! ispin
-      IF (almo_scf_env%nspins .EQ. 2) THEN
+      IF (almo_scf_env%nspins == 2) THEN
          CALL dbcsr_copy(almo_scf_env%quench_t(2), &
                          almo_scf_env%quench_t(1))
          almo_scf_env%domain_map(2)%pairs(:, :) = &
@@ -1512,8 +1503,8 @@ CONTAINS
 
       !mynode = dbcsr_mp_mynode(dbcsr_distribution_mp(&
       !   dbcsr_distribution(almo_scf_env%quench_t(ispin))))
-      !nblkrows_tot = dbcsr_nblkrows_total(almo_scf_env%quench_t(ispin))
-      !nblkcols_tot = dbcsr_nblkcols_total(almo_scf_env%quench_t(ispin))
+      !CALL dbcsr_get_info(almo_scf_env%quench_t(ispin), distribution=dist, &
+      !                    nblkrows_total=nblkrows_tot, nblkcols_total=nblkcols_tot)
       !DO row = 1, nblkrows_tot
       !   DO col = 1, nblkcols_tot
       !      tr = .FALSE.
@@ -1522,7 +1513,7 @@ CONTAINS
       !      CALL dbcsr_get_stored_coordinates(almo_scf_env%quench_t(ispin),&
       !              iblock_row, iblock_col, tr, hold)
       !      CALL dbcsr_get_block_p(almo_scf_env%quench_t(ispin),&
-      !              row, col, p_new_block, found)
+      !              row, col, p_old_block, found)
       !      write(*,*) "RST_NOTE:", mynode, row, col, hold, found
       !   ENDDO
       !ENDDO

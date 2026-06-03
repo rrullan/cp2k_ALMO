@@ -1,12 +1,12 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
-!> \brief module that contains the algorithms to perform an itrative
+!> \brief module that contains the algorithms to perform an iterative
 !>         diagonalization by the block-Davidson approach
 !>         P. Blaha, et al J. Comp. Physics, 229, (2010), 453-460
 !>         \Iterative diagonalization in augmented plane wave based
@@ -36,11 +36,11 @@ MODULE qs_block_davidson_types
              block_davidson_env_create, davidson_type
 
    TYPE davidson_type
-      INTEGER :: max_iter, prec_type, solver_type, niter_new_prec, first_prec
-      LOGICAL :: use_sparse_mos
-      REAL(KIND=dp) :: conv_percent, energy_gap, eps_iter
-      TYPE(cp_fm_type), POINTER :: H_block_mat, H_block_vec, &
-                                   matrix_z, matrix_pz, S_block_mat, W_block_mat
+      INTEGER :: max_iter = -1, prec_type = -1, solver_type = -1, niter_new_prec = -1, first_prec = -1
+      LOGICAL :: use_sparse_mos = .FALSE.
+      REAL(KIND=dp) :: conv_percent = -1.0_dp, energy_gap = -1.0_dp, eps_iter = -1.0_dp
+      TYPE(cp_fm_type), POINTER :: H_block_mat => NULL(), H_block_vec => NULL(), &
+                                   matrix_z => NULL(), matrix_pz => NULL(), S_block_mat => NULL(), W_block_mat => NULL()
    END TYPE davidson_type
 
 CONTAINS

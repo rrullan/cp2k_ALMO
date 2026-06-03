@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,6 +18,7 @@ MODULE cp_subsys_methods
                                               atomic_kind_list_type
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE atprop_types,                    ONLY: atprop_create
+   USE cell_methods,                    ONLY: write_cell
    USE cell_types,                      ONLY: cell_retain,&
                                               cell_type
    USE colvar_methods,                  ONLY: colvar_read
@@ -106,8 +107,7 @@ CONTAINS
 
       INTEGER                                            :: stress_tensor
       INTEGER, DIMENSION(:), POINTER                     :: seed_vals
-      LOGICAL                                            :: atomic_energy, atomic_stress, &
-                                                            my_use_motion_section, &
+      LOGICAL                                            :: atomic_energy, my_use_motion_section, &
                                                             pv_availability, pv_diagonal, &
                                                             pv_numerical
       TYPE(atomic_kind_list_type), POINTER               :: atomic_kinds
@@ -143,7 +143,7 @@ CONTAINS
       IF (SIZE(seed_vals) == 1) THEN
          subsys%seed(:, :) = REAL(seed_vals(1), KIND=dp)
       ELSE IF (SIZE(seed_vals) == 6) THEN
-         subsys%seed(1:3, 1:2) = RESHAPE(REAL(seed_vals(:), KIND=dp), (/3, 2/))
+         subsys%seed(1:3, 1:2) = RESHAPE(REAL(seed_vals(:), KIND=dp), [3, 2])
       ELSE
          CPABORT("Supply exactly 1 or 6 arguments for SEED in &SUBSYS only!")
       END IF
@@ -158,7 +158,8 @@ CONTAINS
                             subsys%colvar_p, subsys%gci, root_section, para_env, &
                             force_env_section=my_force_env_section, &
                             subsys_section=my_subsys_section, use_motion_section=my_use_motion_section, &
-                            qmmm=qmmm, qmmm_env=qmmm_env, exclusions=exclusions, elkind=elkind)
+                            qmmm=qmmm, qmmm_env=qmmm_env, exclusions=exclusions, elkind=elkind, &
+                            subsys=subsys)
 
       CALL particle_list_create(particles, els_ptr=particle_set)
       CALL atomic_kind_list_create(atomic_kinds, els_ptr=atomic_kind_set)
@@ -208,12 +209,6 @@ CONTAINS
       CALL atprop_create(subsys%atprop)
       CALL section_vals_val_get(my_force_env_section, "PROPERTIES%ATOMIC%ENERGY", l_val=atomic_energy)
       subsys%atprop%energy = atomic_energy
-      CALL section_vals_val_get(my_force_env_section, "PROPERTIES%ATOMIC%PRESSURE", l_val=atomic_stress)
-      IF (atomic_stress) THEN
-         CPASSERT(pv_availability)
-         CPASSERT(.NOT. pv_numerical)
-      END IF
-      subsys%atprop%stress = atomic_stress
 
       CALL cp_result_create(subsys%results)
    END SUBROUTINE cp_subsys_create
@@ -235,7 +230,7 @@ CONTAINS
       ALLOCATE (subsys%colvar_p(ncol))
       DO ig = 1, ncol
          NULLIFY (subsys%colvar_p(ig)%colvar)
-         CALL colvar_read(subsys%colvar_p(ig)%colvar, ig, colvar_section, subsys%para_env)
+         CALL colvar_read(subsys%colvar_p(ig)%colvar, ig, colvar_section, subsys%para_env, subsys%cell)
       END DO
    END SUBROUTINE cp_subsys_read_colvar
 
@@ -243,7 +238,7 @@ CONTAINS
 !> \brief updates the molecule information of the given subsys
 !> \param small_subsys the subsys to create
 !> \param big_subsys the superset of small_subsys
-!> \param small_cell ...
+!> \param small_cell the cell of small_subsys
 !> \param small_para_env the parallel environment for the new (small)
 !>        subsys
 !> \param sub_atom_index indexes of the atoms that should be in small_subsys
@@ -258,6 +253,9 @@ CONTAINS
 !> \note
 !>      not really ready to be used with different para_envs for the small
 !>      and big part
+!>      qmmm_env_create() should be the only instance where this subroutine is called
+!>      with small_cell distinct from big_subsys%cell; otherwise it could be possible
+!>      to drop the small_cell as input parameter entirely.
 ! **************************************************************************************************
    SUBROUTINE create_small_subsys(small_subsys, big_subsys, small_cell, &
                                   small_para_env, sub_atom_index, sub_atom_kind_name, &
@@ -305,6 +303,8 @@ CONTAINS
       !-----------------------------------------------------------------------------
       topology%cell => small_cell
       CALL cell_retain(small_cell)
+      CALL write_cell(small_cell, subsys_section, tag="CELL")
+      CALL write_cell(small_cell, subsys_section, tag="CELL_REF")
 
       !-----------------------------------------------------------------------------
       !-----------------------------------------------------------------------------
@@ -384,7 +384,8 @@ CONTAINS
       CALL molecule_list_create(mols, els_ptr=molecule_set)
       CALL molecule_kind_list_create(mol_kinds, els_ptr=molecule_kind_set)
       CALL cp_subsys_set(small_subsys, particles=particles, atomic_kinds=atomic_kinds, &
-                         molecules=mols, molecule_kinds=mol_kinds)
+                         molecules=mols, molecule_kinds=mol_kinds, cell=small_cell, &
+                         cell_ref=small_cell, use_ref_cell=.FALSE.)
       CALL particle_list_release(particles)
       CALL atomic_kind_list_release(atomic_kinds)
       CALL molecule_list_release(mols)

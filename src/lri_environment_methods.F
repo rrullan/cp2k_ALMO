@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,18 +23,18 @@ MODULE lri_environment_methods
    USE cell_types,                      ONLY: cell_type
    USE core_ppl,                        ONLY: build_core_ppl_ri
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_type
-   USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
-                                              cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_create,&
-                                              dbcsr_dot,&
-                                              dbcsr_get_block_diag,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_create,&
                                               dbcsr_get_block_p,&
                                               dbcsr_p_type,&
                                               dbcsr_release,&
                                               dbcsr_replicate_all,&
                                               dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_dot,&
+                                              dbcsr_get_block_diag
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_type
+   USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
+                                              cp_print_key_unit_nr
    USE generic_os_integrals,            ONLY: int_overlap_aabb_os
    USE input_constants,                 ONLY: do_lri_inv,&
                                               do_lri_inv_auto,&
@@ -1040,7 +1040,7 @@ CONTAINS
             IF (LOG(1._dp/rcond) > lri_env%cond_max) THEN
                CALL get_pseudo_inverse_svd(s, sinv, rskip)
             ELSE
-               CALL invmat_symm(sinv, "U")
+               CALL invmat_symm(sinv, potrf=.FALSE.)
             END IF
          ELSE
             CALL get_pseudo_inverse_svd(s, sinv, rskip)

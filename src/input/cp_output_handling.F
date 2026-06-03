@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -62,7 +62,7 @@ MODULE cp_output_handling
 
    LOGICAL, PRIVATE, PARAMETER :: debug_this_module = .TRUE.
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_output_handling'
-   PUBLIC :: cp_print_key_should_output, cp_iterate, cp_add_iter_level, cp_rm_iter_level
+   PUBLIC :: cp_print_key_should_output, cp_iterate, cp_get_iter_level_by_name, cp_get_iter_nr, cp_add_iter_level, cp_rm_iter_level
    PUBLIC :: cp_iter_string, cp_print_key_section_create
    PUBLIC :: cp_print_key_unit_nr, cp_print_key_finished_output
    PUBLIC :: cp_print_key_generate_filename, cp_printkey_is_on
@@ -205,9 +205,9 @@ CONTAINS
                           usage="silent", &
                           default_i_val=my_print_level, lone_keyword_i_val=silent_print_level, &
                           enum_c_vals=s2a("on", "off", "silent", "low", "medium", "high", "debug"), &
-                          enum_i_vals=(/silent_print_level - 1, debug_print_level + 1, &
-                                        silent_print_level, low_print_level, &
-                                        medium_print_level, high_print_level, debug_print_level/))
+                          enum_i_vals=[silent_print_level - 1, debug_print_level + 1, &
+                                       silent_print_level, low_print_level, &
+                                       medium_print_level, high_print_level, debug_print_level])
       CALL section_add_keyword(print_key_section, keyword)
       CALL keyword_release(keyword)
 
@@ -268,7 +268,7 @@ CONTAINS
                           "all iteration levels are checked for the last iteration step.", &
                           usage="ADD_LAST (NO|NUMERIC|SYMBOLIC)", &
                           enum_c_vals=s2a("no", "numeric", "symbolic"), &
-                          enum_i_vals=(/add_last_no, add_last_numeric, add_last_symbolic/), &
+                          enum_i_vals=[add_last_no, add_last_numeric, add_last_symbolic], &
                           enum_desc=s2a("Do not mark last iteration specifically", &
                                         "Mark last iteration with its iteration number", &
                                         "Mark last iteration with lowercase letter l"), &
@@ -601,6 +601,56 @@ CONTAINS
    END SUBROUTINE cp_iterate
 
 ! **************************************************************************************************
+!> \brief Return the index of an iteration level by its name.
+!> \param iteration_info the iteration info to query
+!> \param level_name     level name to query.
+!> \return iteration level index or 0 if there is no such level
+!> \author Sergey Chulkov
+! **************************************************************************************************
+   FUNCTION cp_get_iter_level_by_name(iteration_info, level_name) RESULT(rlevel)
+      TYPE(cp_iteration_info_type), INTENT(IN), POINTER  :: iteration_info
+      CHARACTER(LEN=*), INTENT(IN)                       :: level_name
+      INTEGER                                            :: rlevel
+
+      CPASSERT(ASSOCIATED(iteration_info))
+      CPASSERT(iteration_info%ref_count > 0)
+      DO rlevel = iteration_info%n_rlevel, 1, -1
+         IF (iteration_info%level_name(rlevel) == level_name) EXIT
+      END DO
+
+   END FUNCTION cp_get_iter_level_by_name
+
+! **************************************************************************************************
+!> \brief Return the current iteration number at a given level.
+!> \param iteration_info the iteration info to query
+!> \param rlevel         index of the iteration level. Use the level on top of the stack,
+!>                       if it is not given
+!> \param iter_nr        iteration number [out]
+!> \param last_iter      last iteration flag [out]
+!> \author Sergey Chulkov
+! **************************************************************************************************
+   SUBROUTINE cp_get_iter_nr(iteration_info, rlevel, iter_nr, last_iter)
+      TYPE(cp_iteration_info_type), INTENT(IN), POINTER  :: iteration_info
+      INTEGER, INTENT(IN), OPTIONAL                      :: rlevel
+      INTEGER, INTENT(OUT), OPTIONAL                     :: iter_nr
+      LOGICAL, INTENT(OUT), OPTIONAL                     :: last_iter
+
+      INTEGER                                            :: ilevel
+
+      CPASSERT(ASSOCIATED(iteration_info))
+      CPASSERT(iteration_info%ref_count > 0)
+      IF (PRESENT(rlevel)) THEN
+         CPASSERT(rlevel > 0 .AND. rlevel <= iteration_info%n_rlevel)
+         ilevel = rlevel
+      ELSE
+         ilevel = iteration_info%n_rlevel
+      END IF
+
+      IF (PRESENT(iter_nr)) iter_nr = iteration_info%iteration(ilevel)
+      IF (PRESENT(last_iter)) last_iter = iteration_info%last_iter(ilevel)
+   END SUBROUTINE cp_get_iter_nr
+
+! **************************************************************************************************
 !> \brief Adds an iteration level
 !> \param iteration_info the iteration info to which an iteration level has
 !>        to be added
@@ -708,8 +758,8 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: my_local
       CHARACTER(len=default_path_length)                 :: filename
 
-      CHARACTER(len=default_path_length)                 :: outPath, postfix, root
-      CHARACTER(len=default_string_length)               :: my_middle_name, outName
+      CHARACTER(len=default_path_length)                 :: outName, outPath, postfix, root
+      CHARACTER(len=default_string_length)               :: my_middle_name
       INTEGER                                            :: my_ind1, my_ind2
       LOGICAL                                            :: has_root
 
@@ -943,7 +993,10 @@ CONTAINS
                                  WRITE (unit_nr, *) "File "//TRIM(filename_bak_2)//" not existing.."
                            END IF
                         ELSE
-                           CALL m_mov(TRIM(filename_bak_2), TRIM(filename_bak_1))
+                           ! Shared file: rotate on the source rank only; per-task
+                           ! (my_local) files are per-rank, rotated by their owner.
+                           IF (my_local .OR. logger%para_env%is_source()) &
+                              CALL m_mov(TRIM(filename_bak_2), TRIM(filename_bak_1))
                         END IF
                      END DO
                      ! The last backup is always the one with index 1
@@ -953,7 +1006,8 @@ CONTAINS
                         IF (unit_nr > 0) &
                            WRITE (unit_nr, *) "Moving file "//TRIM(filename)//" into file "//TRIM(filename_bak)//"."
                      END IF
-                     CALL m_mov(TRIM(filename), TRIM(filename_bak))
+                     IF (my_local .OR. logger%para_env%is_source()) &
+                        CALL m_mov(TRIM(filename), TRIM(filename_bak))
                   ELSE
                      ! Zero the backup history for this new iteration level..
                      print_key%ibackup(my_backup_level) = 0
@@ -1040,7 +1094,7 @@ CONTAINS
                                   logger%para_env%is_source() .OR. &
                                   my_mpi_io)) THEN
          CALL section_vals_val_get(print_key, "FILENAME", c_val=outPath)
-         IF (my_on_file .OR. outPath .NE. '__STD_OUT__') THEN
+         IF (my_on_file .OR. outPath /= '__STD_OUT__') THEN
             CPASSERT(unit_nr > 0)
             IF (.NOT. my_mpi_io) THEN
                CALL close_file(unit_nr, "KEEP")

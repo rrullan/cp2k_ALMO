@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,13 +24,13 @@ MODULE tip_scan_types
 
 ! **************************************************************************************************
    TYPE scanning_type
-      INTEGER                              :: num_scan_points
-      REAL(KIND=dp), DIMENSION(3)          :: ref_point
+      INTEGER                              :: num_scan_points = -1
+      REAL(KIND=dp), DIMENSION(3)          :: ref_point = -1.0_dp
       REAL(KIND=dp), DIMENSION(:, :), &
          ALLOCATABLE                       :: tip_pos
-      CHARACTER(LEN=default_string_length) :: tip_cube_file
-      TYPE(pw_r3d_rs_type), POINTER               :: tip_pw_r
-      TYPE(pw_c1d_gs_type), POINTER               :: tip_pw_g
+      CHARACTER(LEN=default_string_length) :: tip_cube_file = ""
+      TYPE(pw_r3d_rs_type), POINTER               :: tip_pw_r => NULL()
+      TYPE(pw_c1d_gs_type), POINTER               :: tip_pw_g => NULL()
    END TYPE scanning_type
 ! **************************************************************************************************
 

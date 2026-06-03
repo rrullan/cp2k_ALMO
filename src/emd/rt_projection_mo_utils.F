@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,6 +13,7 @@ MODULE rt_projection_mo_utils
    USE cp_control_types,                ONLY: dft_control_type,&
                                               proj_mo_type,&
                                               rtp_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply
    USE cp_files,                        ONLY: close_file,&
                                               open_file
@@ -34,9 +35,6 @@ MODULE rt_projection_mo_utils
                                               cp_print_key_generate_filename,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
-   USE input_constants,                 ONLY: proj_mo_ref_scf,&
-                                              proj_mo_ref_xas_tdp
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -50,7 +48,6 @@ MODULE rt_projection_mo_utils
    USE qs_kind_types,                   ONLY: qs_kind_type
    USE qs_mo_io,                        ONLY: read_mos_restart_low
    USE qs_mo_types,                     ONLY: deallocate_mo_set,&
-                                              duplicate_mo_set,&
                                               mo_set_type
    USE rt_propagation_types,            ONLY: get_rtp,&
                                               rt_prop_type
@@ -76,7 +73,7 @@ CONTAINS
       TYPE(rtp_control_type), POINTER                    :: rtp_control
 
       INTEGER                                            :: i_rep, j_td, n_rep_val, nbr_mo_td_max, &
-                                                            nrep, reftype
+                                                            nrep
       INTEGER, DIMENSION(:), POINTER                     :: tmp_ints
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
@@ -99,56 +96,39 @@ CONTAINS
          ALLOCATE (rtp_control%proj_mo_list(i_rep)%proj_mo)
          proj_mo => rtp_control%proj_mo_list(i_rep)%proj_mo
 
-         CALL section_vals_val_get(proj_mo_section, "REFERENCE_TYPE", i_rep_section=i_rep, &
-                                   i_val=reftype)
-
          CALL section_vals_val_get(proj_mo_section, "REF_MO_FILE_NAME", i_rep_section=i_rep, &
                                    c_val=proj_mo%ref_mo_file_name)
+
+         CALL section_vals_val_get(proj_mo_section, "REF_ADD_LUMO", i_rep_section=i_rep, &
+                                   i_val=proj_mo%ref_nlumo)
 
          ! Relevent only in EMD
          IF (.NOT. rtp_control%fixed_ions) &
             CALL section_vals_val_get(proj_mo_section, "PROPAGATE_REF", i_rep_section=i_rep, &
                                       l_val=proj_mo%propagate_ref)
 
-         IF (reftype == proj_mo_ref_scf) THEN
-            ! If no reference .wfn is provided, using the restart SCF file:
-            IF (proj_mo%ref_mo_file_name == "DEFAULT") THEN
-               CALL section_vals_val_get(input, "DFT%WFN_RESTART_FILE_NAME", n_rep_val=n_rep_val)
-               IF (n_rep_val > 0) THEN
-                  CALL section_vals_val_get(input, "DFT%WFN_RESTART_FILE_NAME", c_val=proj_mo%ref_mo_file_name)
-               ELSE
-                  !try to read from the filename that is generated automatically from the printkey
-                  print_key => section_vals_get_subs_vals(input, "DFT%SCF%PRINT%RESTART")
-                  logger => cp_get_default_logger()
-                  proj_mo%ref_mo_file_name = cp_print_key_generate_filename(logger, print_key, &
-                                                                            extension=".wfn", my_local=.FALSE.)
-               END IF
+         ! If no reference .wfn is provided, using the restart SCF file:
+         IF (proj_mo%ref_mo_file_name == "DEFAULT") THEN
+            CALL section_vals_val_get(input, "DFT%WFN_RESTART_FILE_NAME", n_rep_val=n_rep_val)
+            IF (n_rep_val > 0) THEN
+               CALL section_vals_val_get(input, "DFT%WFN_RESTART_FILE_NAME", c_val=proj_mo%ref_mo_file_name)
+            ELSE
+               !try to read from the filename that is generated automatically from the printkey
+               print_key => section_vals_get_subs_vals(input, "DFT%SCF%PRINT%RESTART")
+               logger => cp_get_default_logger()
+               proj_mo%ref_mo_file_name = cp_print_key_generate_filename(logger, print_key, &
+                                                                         extension=".wfn", my_local=.FALSE.)
             END IF
-
-            CALL section_vals_val_get(proj_mo_section, "REF_MO_INDEX", i_rep_section=i_rep, &
-                                      i_vals=tmp_ints)
-            ALLOCATE (proj_mo%ref_mo_index, SOURCE=tmp_ints(:))
-            CALL section_vals_val_get(proj_mo_section, "REF_MO_SPIN", i_rep_section=i_rep, &
-                                      i_val=proj_mo%ref_mo_spin)
-
-            ! Read the SCF mos and store the one required
-            CALL read_reference_mo_from_wfn(qs_env, proj_mo)
-
-         ELSE IF (reftype == proj_mo_ref_xas_tdp) THEN
-            IF (proj_mo%ref_mo_file_name == "DEFAULT") THEN
-               CALL cp_abort(__LOCATION__, &
-                             "Input error in DFT%REAL_TIME_PROPAGATION%PRINT%PROJECTION_MO. "// &
-                             "For REFERENCE_TYPE XAS_TDP one must define the name "// &
-                             "of the .wfn file to read the reference MO from. Please define REF_MO_FILE_NAME.")
-            END IF
-            ALLOCATE (proj_mo%ref_mo_index(1))
-            ! XAS restart files contain only one excited state
-            proj_mo%ref_mo_index(1) = 1
-            proj_mo%ref_mo_spin = 1
-            ! Read XAS TDP mos
-            CALL read_reference_mo_from_wfn(qs_env, proj_mo, xas_ref=.TRUE.)
-
          END IF
+
+         CALL section_vals_val_get(proj_mo_section, "REF_MO_INDEX", i_rep_section=i_rep, &
+                                   i_vals=tmp_ints)
+         ALLOCATE (proj_mo%ref_mo_index, SOURCE=tmp_ints(:))
+         CALL section_vals_val_get(proj_mo_section, "REF_MO_SPIN", i_rep_section=i_rep, &
+                                   i_val=proj_mo%ref_mo_spin)
+
+         ! Read the SCF mos and store the one required
+         CALL read_reference_mo_from_wfn(qs_env, proj_mo)
 
          ! Initialize the other parameters related to the TD mos.
          CALL section_vals_val_get(proj_mo_section, "SUM_ON_ALL_REF", i_rep_section=i_rep, &
@@ -165,20 +145,26 @@ CONTAINS
          CALL section_vals_val_get(proj_mo_section, "TD_MO_INDEX", i_rep_section=i_rep, &
                                    i_vals=tmp_ints)
 
-         ALLOCATE (proj_mo%td_mo_index, SOURCE=tmp_ints(:))
          nbr_mo_td_max = mos(proj_mo%td_mo_spin)%mo_coeff%matrix_struct%ncol_global
+
+         ALLOCATE (proj_mo%td_mo_index, SOURCE=tmp_ints(:))
          IF (proj_mo%td_mo_index(1) == -1) THEN
             DEALLOCATE (proj_mo%td_mo_index)
             ALLOCATE (proj_mo%td_mo_index(nbr_mo_td_max))
+            ALLOCATE (proj_mo%td_mo_occ(nbr_mo_td_max))
             DO j_td = 1, nbr_mo_td_max
                proj_mo%td_mo_index(j_td) = j_td
+               proj_mo%td_mo_occ(j_td) = mos(proj_mo%td_mo_spin)%occupation_numbers(proj_mo%td_mo_index(j_td))
             END DO
          ELSE
+            ALLOCATE (proj_mo%td_mo_occ(SIZE(proj_mo%td_mo_index)))
+            proj_mo%td_mo_occ(:) = 0.0_dp
             DO j_td = 1, SIZE(proj_mo%td_mo_index)
                IF (proj_mo%td_mo_index(j_td) > nbr_mo_td_max) &
                   CALL cp_abort(__LOCATION__, &
                                 "The MO number available in the Time Dependent run "// &
                                 "is smaller than the MO number you have required in TD_MO_INDEX.")
+               proj_mo%td_mo_occ(j_td) = mos(proj_mo%td_mo_spin)%occupation_numbers(proj_mo%td_mo_index(j_td))
             END DO
          END IF
 
@@ -190,35 +176,31 @@ CONTAINS
    END SUBROUTINE init_mo_projection
 
 ! **************************************************************************************************
-!> \brief Read the MO from .wfn file and store the required mos for TD projections
+!> \brief Read the MO from .wfn file and store the required MOs for TD projections
 !> \param qs_env ...
 !> \param proj_mo ...
-!> \param xas_ref ...
 !> \author Guillaume Le Breton (04.2023)
 ! **************************************************************************************************
-   SUBROUTINE read_reference_mo_from_wfn(qs_env, proj_mo, xas_ref)
+   SUBROUTINE read_reference_mo_from_wfn(qs_env, proj_mo)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(proj_mo_type), POINTER                        :: proj_mo
-      LOGICAL, OPTIONAL                                  :: xas_ref
 
       INTEGER                                            :: i_ref, ispin, mo_index, natom, &
                                                             nbr_mo_max, nbr_ref_mo, nspins, &
                                                             real_mo_index, restart_unit
-      LOGICAL                                            :: is_file, my_xasref
+      LOGICAL                                            :: is_file
       TYPE(cp_fm_struct_type), POINTER                   :: mo_ref_fmstruct
       TYPE(cp_fm_type)                                   :: mo_coeff_temp
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_s
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mo_qs, mo_ref_temp
+      TYPE(mo_set_type), POINTER                         :: mo_set
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
 
-      NULLIFY (mo_qs, mo_ref_temp, qs_kind_set, particle_set, para_env, dft_control, &
+      NULLIFY (mo_qs, mo_ref_temp, mo_set, qs_kind_set, particle_set, para_env, dft_control, &
                mo_ref_fmstruct, matrix_s)
-
-      my_xasref = .FALSE.
-      IF (PRESENT(xas_ref)) my_xasref = xas_ref
 
       CALL get_qs_env(qs_env, &
                       qs_kind_set=qs_kind_set, &
@@ -230,20 +212,28 @@ CONTAINS
 
       natom = SIZE(particle_set, 1)
 
-      ! If the restart comes from DFT%XAS_TDP%PRINT%RESTART_WFN, then always 2 spins are saved
-      IF (my_xasref) THEN
-         nspins = 2
-         ALLOCATE (mo_ref_temp(nspins))
-         DO ispin = 1, nspins
-            CALL duplicate_mo_set(mo_ref_temp(ispin), mo_qs(1))
-         END DO
-      ELSE
-         nspins = SIZE(mo_qs)
-         ALLOCATE (mo_ref_temp(nspins))
-         DO ispin = 1, nspins
-            CALL duplicate_mo_set(mo_ref_temp(ispin), mo_qs(ispin))
-         END DO
-      END IF
+      nspins = SIZE(mo_qs)
+
+      ALLOCATE (mo_ref_temp(nspins))
+
+      DO ispin = 1, nspins
+         mo_set => mo_qs(ispin)
+         mo_ref_temp(ispin)%nmo = mo_set%nmo + proj_mo%ref_nlumo
+         NULLIFY (mo_ref_fmstruct)
+         CALL cp_fm_struct_create(mo_ref_fmstruct, nrow_global=mo_set%nao, &
+                               ncol_global=mo_ref_temp(ispin)%nmo, para_env=para_env, context=mo_set%mo_coeff%matrix_struct%context)
+         NULLIFY (mo_ref_temp(ispin)%mo_coeff)
+         ALLOCATE (mo_ref_temp(ispin)%mo_coeff)
+         CALL cp_fm_create(mo_ref_temp(ispin)%mo_coeff, mo_ref_fmstruct)
+         CALL cp_fm_struct_release(mo_ref_fmstruct)
+
+         mo_ref_temp(ispin)%nao = mo_set%nao
+         mo_ref_temp(ispin)%homo = mo_set%homo
+         mo_ref_temp(ispin)%nelectron = mo_set%nelectron
+         ALLOCATE (mo_ref_temp(ispin)%eigenvalues(mo_ref_temp(ispin)%nmo))
+         ALLOCATE (mo_ref_temp(ispin)%occupation_numbers(mo_ref_temp(ispin)%nmo))
+         NULLIFY (mo_set)
+      END DO
 
       IF (para_env%is_source()) THEN
          INQUIRE (FILE=TRIM(proj_mo%ref_mo_file_name), exist=is_file)
@@ -266,9 +256,8 @@ CONTAINS
 
       IF (proj_mo%ref_mo_spin > SIZE(mo_ref_temp)) &
          CALL cp_abort(__LOCATION__, &
-                       "You asked as reference spin the BETA one while the "// &
-                       "reference .wfn file has only one spin. Use a reference .wfn "// &
-                       "with 2 spins separated or set REF_MO_SPIN to 1")
+                       "Projection on spin BETA is not possible as the reference wavefunction "// &
+                       "only has one spin channel. Use a reference .wfn calculated with UKS/LSD, or set REF_MO_SPIN to 1")
 
       ! Store only the mos required
       nbr_mo_max = mo_ref_temp(proj_mo%ref_mo_spin)%mo_coeff%matrix_struct%ncol_global
@@ -282,15 +271,17 @@ CONTAINS
          DO i_ref = 1, SIZE(proj_mo%ref_mo_index)
             IF (proj_mo%ref_mo_index(i_ref) > nbr_mo_max) &
                CALL cp_abort(__LOCATION__, &
-                             "The MO number available in the Reference SCF "// &
-                             "is smaller than the MO number you have required in REF_MO_INDEX.")
+                             "The number of MOs available in the reference wavefunction "// &
+                             "is smaller than the MO number you have requested in REF_MO_INDEX.")
          END DO
       END IF
       nbr_ref_mo = SIZE(proj_mo%ref_mo_index)
 
       IF (nbr_ref_mo > nbr_mo_max) &
          CALL cp_abort(__LOCATION__, &
-                       "The number of reference mo is larger then the total number of available one in the .wfn file.")
+                       "The total number of requested MOs is larger than what is available in the reference wavefunction. "// &
+                       "If you are trying to project onto virtual states, make sure they are included in the .wfn file "// &
+                       "e.g., by the ADDED_MOS keyword in the SCF section of the input when calculating your reference.")
 
       ! Store
       ALLOCATE (proj_mo%mo_ref(nbr_ref_mo))
@@ -490,7 +481,6 @@ CONTAINS
                           ncol=1, &
                           source_start=proj_mo%td_mo_index(j_td), &
                           target_start=1)
-
          IF (is_emd) THEN
             ! The reference MO have to be propagated in the new basis, so the projection
             CALL cp_fm_trace(mo_coeff_temp, S_mo_ref, real_proj)
@@ -514,7 +504,7 @@ CONTAINS
 
          ! Store the result
          phase(j_td) = ATAN2(imag_proj, real_proj) ! in radians
-         popu(j_td) = real_proj**2 + imag_proj**2
+         popu(j_td) = proj_mo%td_mo_occ(j_td)*(real_proj**2 + imag_proj**2)
       END DO
 
       CALL cp_fm_struct_release(mo_ref_fmstruct)
@@ -526,7 +516,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Write in one file the projection of (all) the time-dependent MO coefficients
-!>        on one reference ones
+!>        onto reference ones
 !> \param qs_env ...
 !> \param print_mo_section ...
 !> \param proj_mo ...
@@ -560,7 +550,7 @@ CONTAINS
       IF (proj_mo%sum_on_all_ref) THEN
          ext = "-"//TRIM(ADJUSTL(cp_to_string(n_proj)))//"-ALL_REF.dat"
       ELSE
-         ! Filename is update wrt the reference MO number
+         ! Filename is updated wrt the reference MO number
          ext = "-"//TRIM(ADJUSTL(cp_to_string(n_proj)))// &
                "-REF-"// &
                TRIM(ADJUSTL(cp_to_string(proj_mo%ref_mo_index(i_ref))))// &
@@ -572,9 +562,6 @@ CONTAINS
 
       IF (print_unit /= output_unit) THEN
          INQUIRE (UNIT=print_unit, NAME=filename)
-         WRITE (UNIT=output_unit, FMT="(/,T2,A,2(/,T3,A),/)") &
-            "PROJECTION MO", "The projection of the TD MOs is done in the file:", &
-            TRIM(filename)
          WRITE (UNIT=print_unit, FMT="(/,(T2,A,T40,I6))") &
             "Real time propagation step:", qs_env%sim_step
       ELSE
@@ -620,7 +607,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Propagate the reference MO in case of EMD: since the nuclei moves, the MO coeff can be
-!>        propagate to represent the same MO (because the AO move with the nuclei).
+!>        propagated to represent the same MO (because the AO move with the nuclei).
 !>        To do so, we use the same formula as for the electrons of the system, but without the
 !>        Hamiltonian:
 !>        dc^j_alpha/dt = - sum_{beta, gamma} S^{-1}_{alpha, beta} B_{beta,gamma} c^j_gamma

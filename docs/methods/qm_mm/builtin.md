@@ -10,7 +10,7 @@ will simulate the substrate at the QM level (using the semi-empirical AM1 method
 equilibrate our system with all components at the MM level.
 
 ```{note}
-The input files can be downloaded [here](https://www.cp2k.org/_media/:howto:inputfiles.zip).
+The input files can be downloaded [here](https://github.com/cp2k/cp2k-examples/tree/master/qm_mm).
 ```
 
 ![](qm_mm_substrate_in_protein.png){align=center}
@@ -90,7 +90,7 @@ input file.
 We can now move on to actually running CP2K. We will first run 1000 steps of energy minimization (or
 fewer, depending on the convergence) with the input file `em.inp` to eliminate bad contacts. For
 quantities like cell size, for instance, CP2K allows you to specify your units by placing them in
-brackets, for instance [TIMESTEP](#CP2K_INPUT.MOTION.MD.TIMESTEP) \[fs\] 0.5.
+brackets, for instance [TIMESTEP](#CP2K_INPUT.MOTION.MD.TIMESTEP) [fs] 0.5.
 
 ```none
 cp2k can be run using a single process:

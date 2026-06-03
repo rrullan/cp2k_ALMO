@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,6 +14,10 @@
 ! **************************************************************************************************
 MODULE qs_energy_window
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, dbcsr_get_info, dbcsr_multiply, &
+        dbcsr_p_type, dbcsr_release, dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_frobenius_norm
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr
    USE cp_fm_basic_linalg,              ONLY: cp_fm_trace
@@ -32,10 +36,6 @@ MODULE qs_energy_window
                                               cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_copy_into_existing, dbcsr_create, dbcsr_desymmetrize, &
-        dbcsr_frobenius_norm, dbcsr_get_info, dbcsr_multiply, dbcsr_p_type, dbcsr_release, &
-        dbcsr_type
    USE input_section_types,             ONLY: section_get_ivals,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -122,7 +122,7 @@ CONTAINS
       CALL qs_subsys_get(subsys, particles=particles)
       CALL qs_rho_get(rho_struct=rho, rho_ao=rho_ao)
       IF (SIZE(rho_ao) > 1) CALL cp_warn(__LOCATION__, &
-                                         "The printing of energy windows is currently only implemented for clsoe shell systems")
+                                         "The printing of energy windows is only implemented for closed shell systems")
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
       !reading the input
@@ -203,7 +203,7 @@ CONTAINS
          !ensure the correct sparsity
          CALL copy_fm_to_dbcsr(P_window_fm, tmp)
          CALL dbcsr_copy(window, matrix_ks(1)%matrix)
-         CALL dbcsr_copy_into_existing(window, tmp)
+         CALL dbcsr_copy(window, tmp, keep_sparsity=.TRUE.)
          CALL calculate_rho_elec(matrix_p=window, &
                                  rho=rho_r, &
                                  rho_gspace=rho_g, &
@@ -270,7 +270,7 @@ CONTAINS
             CALL copy_fm_to_dbcsr(P_window_fm, tmp)
             !ensure the correct sparsity
             CALL dbcsr_copy(window, matrix_ks(1)%matrix)
-            CALL dbcsr_copy_into_existing(window, tmp)
+            CALL dbcsr_copy(window, tmp, keep_sparsity=.TRUE.)
             CALL calculate_rho_elec(matrix_p=window, &
                                     rho=rho_r, &
                                     rho_gspace=rho_g, &

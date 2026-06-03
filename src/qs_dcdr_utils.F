@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,6 +15,14 @@ MODULE qs_dcdr_utils
    USE cell_types,                      ONLY: cell_type,&
                                               get_cell
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_create,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type,&
+                                              dbcsr_type_no_symmetry,&
+                                              dbcsr_type_symmetric
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
@@ -42,14 +50,6 @@ MODULE qs_dcdr_utils
                                               cp_print_key_unit_nr
    USE cp_result_methods,               ONLY: get_results
    USE cp_result_types,                 ONLY: cp_result_type
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_create,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type,&
-                                              dbcsr_type_no_symmetry,&
-                                              dbcsr_type_symmetric
    USE input_constants,                 ONLY: current_orb_center_wannier,&
                                               use_mom_ref_user
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
@@ -64,9 +64,9 @@ MODULE qs_dcdr_utils
    USE moments_utils,                   ONLY: get_reference_point
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE particle_types,                  ONLY: particle_type
+   USE qs_core_matrices,                ONLY: kinetic_energy_matrix
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
-   USE qs_kinetic,                      ONLY: build_kinetic_matrix
    USE qs_ks_types,                     ONLY: qs_ks_env_type
    USE qs_linres_types,                 ONLY: dcdr_env_type,&
                                               linres_control_type
@@ -91,11 +91,11 @@ MODULE qs_dcdr_utils
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_dcdr_utils'
 
-   REAL(dp), DIMENSION(3, 3, 3), PARAMETER  :: Levi_Civita = RESHAPE((/ &
+   REAL(dp), DIMENSION(3, 3, 3), PARAMETER  :: Levi_Civita = RESHAPE([ &
                                                           0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, &
                                                           0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, -1.0_dp, 0.0_dp, 0.0_dp, &
-                                                        0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp/), &
-                                                                     (/3, 3, 3/))
+                                                         0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp], &
+                                                                     [3, 3, 3])
 
 CONTAINS
 
@@ -111,7 +111,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE multiply_localization(ao_matrix, mo_coeff, work, nmo, icenter, res)
       TYPE(dbcsr_type), INTENT(IN), POINTER              :: ao_matrix
-      TYPE(cp_fm_type), INTENT(IN)                       :: mo_coeff, work
+      TYPE(cp_fm_type), INTENT(IN)                       :: mo_coeff
+      TYPE(cp_fm_type), INTENT(INOUT)                    :: work
       INTEGER, INTENT(IN)                                :: nmo, icenter
       TYPE(cp_fm_type), INTENT(IN)                       :: res
 
@@ -227,6 +228,7 @@ CONTAINS
          CALL cp_fm_get_info(mo_coeff, nrow_global=nao, ncol_block=max_block)
 
          ALLOCATE (vecbuffer(nao, max_block))
+         vecbuffer = 0.0_dp
          !
          ! read headers
          IF (rst_unit > 0) READ (rst_unit, IOSTAT=iostat) lambda_tmp, beta_tmp, nspins_tmp, nao_tmp
@@ -238,14 +240,14 @@ CONTAINS
 
          ! check that the number nao, nmo and nspins are
          ! the same as in the current mos
-         IF (nspins_tmp .NE. nspins) THEN
+         IF (nspins_tmp /= nspins) THEN
             CPABORT("nspins not consistent")
          END IF
-         IF (nao_tmp .NE. nao) CPABORT("nao not consistent")
+         IF (nao_tmp /= nao) CPABORT("nao not consistent")
          ! check that it's the right file
          ! the same as in the current mos
-         IF (lambda_tmp .NE. lambda) CPABORT("lambda not consistent")
-         IF (beta_tmp .NE. beta) CPABORT("beta not consistent")
+         IF (lambda_tmp /= lambda) CPABORT("lambda not consistent")
+         IF (beta_tmp /= beta) CPABORT("beta not consistent")
          !
          DO ispin = 1, nspins
             CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff)
@@ -253,7 +255,7 @@ CONTAINS
             !
             IF (rst_unit > 0) READ (rst_unit) nmo_tmp
             CALL para_env%bcast(nmo_tmp)
-            IF (nmo_tmp .NE. nmo) CPABORT("nmo not consistent")
+            IF (nmo_tmp /= nmo) CPABORT("nmo not consistent")
             !
             ! read the response
             DO i = 1, nmo, MAX(max_block, 1)
@@ -578,7 +580,7 @@ CONTAINS
 
       ! check that the number of localized states is equal to the number of states
       nmoloc = SIZE(linres_control%qs_loc_env%localized_wfn_control%centers_set(1)%array, 2)
-      IF (nmoloc .NE. nmo) THEN
+      IF (nmoloc /= nmo) THEN
          CPABORT("The number of localized functions is not equal to the number of states.")
       END IF
 
@@ -665,6 +667,7 @@ CONTAINS
       TYPE(cp_fm_type), POINTER                          :: mo_coeff
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_s
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(molecule_type), DIMENSION(:), POINTER         :: molecule_set
@@ -722,16 +725,27 @@ CONTAINS
                                 sab_nl=sab_orb)
 
       NULLIFY (dcdr_env%matrix_t)
-      CALL build_kinetic_matrix(ks_env, matrix_t=dcdr_env%matrix_t, &
-                                matrix_name="KINETIC ENERGY MATRIX", &
-                                basis_type="ORB", &
-                                sab_nl=sab_orb, nderivative=1, &
-                                eps_filter=dft_control%qs_control%eps_filter_matrix)
+      NULLIFY (matrix_p)
+      CALL kinetic_energy_matrix(qs_env, matrix_t=dcdr_env%matrix_t, matrix_p=matrix_p, &
+                                 matrix_name="KINETIC ENERGY MATRIX", &
+                                 calculate_forces=.FALSE., &
+                                 basis_type="ORB", &
+                                 sab_orb=sab_orb, &
+                                 nderivative=1, &
+                                 eps_filter=dft_control%qs_control%eps_filter_matrix)
+
+!     CALL build_kinetic_matrix(ks_env, matrix_t=dcdr_env%matrix_t, &
+!                               matrix_name="KINETIC ENERGY MATRIX", &
+!                               basis_type="ORB", &
+!                               sab_nl=sab_orb, nderivative=1, &
+!                               eps_filter=dft_control%qs_control%eps_filter_matrix)
 
       ! Get inputs
       CALL section_vals_val_get(dcdr_section, "DISTRIBUTED_ORIGIN", l_val=dcdr_env%distributed_origin)
       CALL section_vals_val_get(loc_section, "_SECTION_PARAMETERS_", l_val=dcdr_env%localized_psi0)
       CALL section_vals_val_get(lr_section, "RESTART", l_val=qs_env%linres_control%linres_restart)
+      CALL section_vals_val_get(dcdr_section, "Z_MATRIX_METHOD", l_val=dcdr_env%z_matrix_method)
+
       dcdr_env%ref_point = 0._dp
 
       ! List of atoms
@@ -834,15 +848,25 @@ CONTAINS
       ALLOCATE (dcdr_env%op_dR(nspins))
 
       DO ispin = 1, nspins
-         CALL cp_fm_create(dcdr_env%dCR(ispin), dcdr_env%likemos_fm_struct(ispin)%struct)
-         CALL cp_fm_create(dcdr_env%dCR_prime(ispin), dcdr_env%likemos_fm_struct(ispin)%struct)
-         CALL cp_fm_create(dcdr_env%mo_coeff(ispin), dcdr_env%likemos_fm_struct(ispin)%struct)
-         CALL cp_fm_create(dcdr_env%chc(ispin), dcdr_env%momo_fm_struct(ispin)%struct)
-         CALL cp_fm_create(dcdr_env%op_dR(ispin), dcdr_env%likemos_fm_struct(ispin)%struct)
+         CALL cp_fm_create(dcdr_env%dCR(ispin), dcdr_env%likemos_fm_struct(ispin)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(dcdr_env%dCR_prime(ispin), dcdr_env%likemos_fm_struct(ispin)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(dcdr_env%mo_coeff(ispin), dcdr_env%likemos_fm_struct(ispin)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(dcdr_env%chc(ispin), dcdr_env%momo_fm_struct(ispin)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(dcdr_env%op_dR(ispin), dcdr_env%likemos_fm_struct(ispin)%struct, set_zero=.TRUE.)
 
          CALL get_mo_set(mo_set=mos(ispin), mo_coeff=mo_coeff)
          CALL cp_fm_to_fm(mo_coeff, dcdr_env%mo_coeff(ispin))
       END DO
+
+      IF (dcdr_env%z_matrix_method) THEN
+         ALLOCATE (dcdr_env%matrix_m_alpha(3, nspins))
+         DO i = 1, 3
+            DO ispin = 1, nspins
+               CALL cp_fm_create(dcdr_env%matrix_m_alpha(i, ispin), dcdr_env%likemos_fm_struct(1)%struct)
+               CALL cp_fm_set_all(dcdr_env%matrix_m_alpha(i, ispin), 0.0_dp)
+            END DO
+         END DO
+      END IF
 
       ! DBCSR matrices
       NULLIFY (dcdr_env%hamiltonian1)
@@ -1037,6 +1061,10 @@ CONTAINS
       CALL cp_fm_release(dcdr_env%mo_coeff)
       CALL cp_fm_release(dcdr_env%chc)
       CALL cp_fm_release(dcdr_env%op_dR)
+
+      IF (dcdr_env%z_matrix_method) THEN
+         CALL cp_fm_release(dcdr_env%matrix_m_alpha)
+      END IF
 
       ! DBCSR matrices
       CALL dbcsr_deallocate_matrix_set(dcdr_env%perturbed_dm_correction)

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,6 +23,11 @@ MODULE qs_loc_main
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_create,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type,&
+                                              dbcsr_type_symmetric
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
@@ -33,11 +38,6 @@ MODULE qs_loc_main
    USE cp_fm_types,                     ONLY: &
         cp_fm_create, cp_fm_get_info, cp_fm_get_submatrix, cp_fm_init_random, cp_fm_release, &
         cp_fm_set_all, cp_fm_set_submatrix, cp_fm_to_fm, cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_create,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type,&
-                                              dbcsr_type_symmetric
    USE input_constants,                 ONLY: &
         do_loc_cpo_atomic, do_loc_cpo_random, do_loc_cpo_restart, do_loc_cpo_space_nmo, &
         do_loc_cpo_space_wan, op_loc_berry, op_loc_boys, op_loc_pipek, state_loc_list
@@ -341,7 +341,7 @@ CONTAINS
                ALLOCATE (p_rmpv(jspin)%matrix)
                tmatrix => p_rmpv(jspin)%matrix
                CALL dbcsr_create(matrix=tmatrix, template=refmatrix, &
-                                 matrix_type=dbcsr_type_symmetric, nze=0)
+                                 matrix_type=dbcsr_type_symmetric)
                CALL cp_dbcsr_alloc_block_from_nbl(tmatrix, sab_orb)
                CALL dbcsr_set(tmatrix, 0.0_dp)
             END DO
@@ -540,6 +540,7 @@ CONTAINS
       END IF
 
       ncubes = SIZE(list_cubes)
+      CALL cp_fm_get_info(moloc_coeff(ispin), ncol_global=nmo)
       ncubes = MIN(ncubes, nmo)
       ALLOCATE (centers(6, ncubes))
       DO i = 1, ncubes

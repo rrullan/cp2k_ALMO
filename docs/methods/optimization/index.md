@@ -3,8 +3,8 @@
 ```{toctree}
 ---
 titlesonly:
-maxdepth: 1
+maxdepth: 2
 ---
-geometry
+geometry_and_cell_opt
 nudged_elastic_band
 ```

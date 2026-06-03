@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -33,6 +33,14 @@ MODULE hfx_admm_utils
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: admm_control_type,&
                                               dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
+                                              dbcsr_copy,&
+                                              dbcsr_create,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type,&
+                                              dbcsr_type_no_symmetry
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_m_by_n_from_row_template,&
                                               dbcsr_allocate_matrix_set
@@ -47,14 +55,6 @@ MODULE hfx_admm_utils
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_type,&
                                               cp_to_string
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
-                                              dbcsr_copy,&
-                                              dbcsr_create,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type,&
-                                              dbcsr_type_no_symmetry
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE external_potential_types,        ONLY: copy_potential
@@ -159,11 +159,13 @@ CONTAINS
 !> \brief ...
 !> \param qs_env ...
 !> \param calculate_forces ...
+!> \param ext_xc_section ...
 ! **************************************************************************************************
-   SUBROUTINE hfx_admm_init(qs_env, calculate_forces)
+   SUBROUTINE hfx_admm_init(qs_env, calculate_forces, ext_xc_section)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN), OPTIONAL                      :: calculate_forces
+      TYPE(section_vals_type), OPTIONAL, POINTER         :: ext_xc_section
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'hfx_admm_init'
 
@@ -208,6 +210,7 @@ CONTAINS
       IF (PRESENT(calculate_forces)) calc_forces = .TRUE.
 
       hfx_sections => section_vals_get_subs_vals(input, "DFT%XC%HF")
+      IF (PRESENT(ext_xc_section)) hfx_sections => section_vals_get_subs_vals(ext_xc_section, "HF")
 
       CALL section_vals_get(hfx_sections, n_repetition=n_rep_hf)
       IF (n_rep_hf > 1) &
@@ -220,6 +223,7 @@ CONTAINS
          CALL admm_env_create(admm_env, dft_control%admm_control, mos, para_env, natoms, nao_aux_fit)
          CALL set_qs_env(qs_env, admm_env=admm_env)
          xc_section => section_vals_get_subs_vals(input, "DFT%XC")
+         IF (PRESENT(ext_xc_section)) xc_section => ext_xc_section
          CALL create_admm_xc_section(x_data=qs_env%x_data, xc_section=xc_section, &
                                      admm_env=admm_env)
 
@@ -530,7 +534,7 @@ CONTAINS
          admm_kind_set(ikind)%natom = qs_kind_set(ikind)%natom
          admm_kind_set(ikind)%hard_radius = qs_kind_set(ikind)%hard_radius
          admm_kind_set(ikind)%max_rad_local = qs_kind_set(ikind)%max_rad_local
-         admm_kind_set(ikind)%gpw_r3d_rs_type_forced = qs_kind_set(ikind)%gpw_r3d_rs_type_forced
+         admm_kind_set(ikind)%gpw_type_forced = qs_kind_set(ikind)%gpw_type_forced
          admm_kind_set(ikind)%ngrid_rad = qs_kind_set(ikind)%ngrid_rad
          admm_kind_set(ikind)%ngrid_ang = qs_kind_set(ikind)%ngrid_ang
 
@@ -682,6 +686,8 @@ CONTAINS
             roperator = 0.0_dp
          CASE (do_potential_truncated)
             CALL section_vals_val_get(hfx_sections, "INTERACTION_POTENTIAL%CUTOFF_RADIUS", r_val=roperator)
+         CASE (do_potential_mix_cl_trunc)
+            CALL section_vals_val_get(hfx_sections, "INTERACTION_POTENTIAL%CUTOFF_RADIUS", r_val=roperator)
          CASE (do_potential_short)
             CALL section_vals_val_get(hfx_sections, "INTERACTION_POTENTIAL%OMEGA", r_val=omega)
             CALL section_vals_val_get(hfx_sections, "SCREENING%EPS_SCHWARZ", r_val=eps_schwarz)
@@ -761,9 +767,8 @@ CONTAINS
       skip_load_balance_distributed = dft_control%qs_control%skip_load_balance_distributed
       IF (ASSOCIATED(admm_env%task_list_aux_fit)) CALL deallocate_task_list(admm_env%task_list_aux_fit)
       CALL allocate_task_list(admm_env%task_list_aux_fit)
-      CALL generate_qs_task_list(ks_env, admm_env%task_list_aux_fit, &
-                                 reorder_rs_grid_ranks=.FALSE., soft_valid=.FALSE., &
-                                 basis_type=aux_basis_type, &
+      CALL generate_qs_task_list(ks_env, admm_env%task_list_aux_fit, basis_type=aux_basis_type, &
+                                 reorder_rs_grid_ranks=.FALSE., &
                                  skip_load_balance_distributed=skip_load_balance_distributed, &
                                  sab_orb_external=admm_env%sab_aux_fit)
 
@@ -825,8 +830,8 @@ CONTAINS
       CALL allocate_task_list(admm_gapw_env%task_list)
 
       !note: we set soft_valid to .FALSE. want to use AUX_FIT_SOFT and not the normal ORB SOFT basis
-      CALL generate_qs_task_list(ks_env, admm_gapw_env%task_list, reorder_rs_grid_ranks=.FALSE., &
-                                 soft_valid=.FALSE., basis_type="AUX_FIT_SOFT", &
+      CALL generate_qs_task_list(ks_env, admm_gapw_env%task_list, basis_type="AUX_FIT_SOFT", &
+                                 reorder_rs_grid_ranks=.FALSE., &
                                  skip_load_balance_distributed=dft_control%qs_control%skip_load_balance_distributed, &
                                  sab_orb_external=admm_env%sab_aux_fit)
 
@@ -1127,12 +1132,13 @@ CONTAINS
 !> \param just_energy ...
 !> \param v_rspace_new ...
 !> \param v_tau_rspace ...
+!> \param ext_xc_section ...
 !> \par History
 !>     refactoring 03-2011 [MI]
 ! **************************************************************************************************
 
    SUBROUTINE hfx_ks_matrix(qs_env, matrix_ks, rho, energy, calculate_forces, &
-                            just_energy, v_rspace_new, v_tau_rspace)
+                            just_energy, v_rspace_new, v_tau_rspace, ext_xc_section)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_ks
@@ -1140,6 +1146,7 @@ CONTAINS
       TYPE(qs_energy_type), POINTER                      :: energy
       LOGICAL, INTENT(in)                                :: calculate_forces, just_energy
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_rspace_new, v_tau_rspace
+      TYPE(section_vals_type), OPTIONAL, POINTER         :: ext_xc_section
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'hfx_ks_matrix'
 
@@ -1202,6 +1209,8 @@ CONTAINS
       IF (use_virial .AND. calculate_forces) virial%pv_fock_4c = 0.0_dp
 
       hfx_sections => section_vals_get_subs_vals(input, "DFT%XC%HF")
+      IF (PRESENT(ext_xc_section)) hfx_sections => section_vals_get_subs_vals(ext_xc_section, "HF")
+
       CALL section_vals_get(hfx_sections, n_repetition=n_rep_hf)
       CALL section_vals_val_get(hfx_sections, "TREAT_LSD_IN_CORE", l_val=hfx_treat_lsd_in_core, &
                                 i_rep_section=1)
@@ -2469,17 +2478,19 @@ CONTAINS
 !> \param recalc_integrals whether to recalculate integrals (default: value of HF%TREAT_LSD_IN_CORE)
 !> \param external_hfx_sections ...
 !> \param external_x_data ...
+!> \param external_para_env ...
 !> \note
 !>     Simplified version of subroutine hfx_ks_matrix()
 ! **************************************************************************************************
    SUBROUTINE tddft_hfx_matrix(matrix_ks, rho_ao, qs_env, update_energy, recalc_integrals, &
-                               external_hfx_sections, external_x_data)
+                               external_hfx_sections, external_x_data, external_para_env)
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT), &
          TARGET                                          :: matrix_ks, rho_ao
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN), OPTIONAL                      :: update_energy, recalc_integrals
       TYPE(section_vals_type), OPTIONAL, POINTER         :: external_hfx_sections
       TYPE(hfx_type), DIMENSION(:, :), OPTIONAL, TARGET  :: external_x_data
+      TYPE(mp_para_env_type), OPTIONAL, POINTER          :: external_para_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_hfx_matrix'
 
@@ -2513,6 +2524,7 @@ CONTAINS
 
       IF (PRESENT(external_hfx_sections)) hfx_sections => external_hfx_sections
       IF (PRESENT(external_x_data)) x_data => external_x_data
+      IF (PRESENT(external_para_env)) para_env => external_para_env
 
       my_update_energy = .TRUE.
       IF (PRESENT(update_energy)) my_update_energy = update_energy

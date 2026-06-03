@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,13 +15,13 @@ MODULE qs_linres_epr_ownutils
                                               get_atomic_kind
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_p_file,&
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -435,7 +435,7 @@ CONTAINS
                            vks_ra_idir3 = Eval_Interp_Spl3_pbc(ra, &
                                                                vks_pw_spline(idir3, ispin))
 
-                           IF (iat .LT. bo(1) .OR. iat .GT. bo(2)) CYCLE !quick and dirty:
+                           IF (iat < bo(1) .OR. iat > bo(2)) CYCLE !quick and dirty:
                            !                                    !here take care of the partition
 
                            ! + sum_A j_loc_h_A x nabla_vks_s_A
@@ -700,7 +700,7 @@ CONTAINS
                            bind_ra_idir1 = Eval_Interp_Spl3_pbc(ra, &
                                                                 bind_pw_spline(idir1, iB))
 
-                           IF (iat .LT. bo(1) .OR. iat .GT. bo(2)) CYCLE !quick and dirty:
+                           IF (iat < bo(1) .OR. iat > bo(2)) CYCLE !quick and dirty:
                            !                                    !here take care of the partition
 
                            rho_spin = 0.0_dp

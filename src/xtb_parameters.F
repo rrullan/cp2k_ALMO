@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,19 +18,11 @@ MODULE xtb_parameters
                                               set_sto_basis_set,&
                                               sto_basis_set_type
    USE cp_control_types,                ONLY: xtb_control_type
-   USE cp_linked_list_input,            ONLY: cp_sll_val_next,&
-                                              cp_sll_val_type
    USE cp_parser_methods,               ONLY: parser_get_next_line,&
                                               parser_get_object
    USE cp_parser_types,                 ONLY: cp_parser_type,&
                                               parser_create,&
                                               parser_release
-   USE input_section_types,             ONLY: section_vals_get,&
-                                              section_vals_get_subs_vals,&
-                                              section_vals_list_get,&
-                                              section_vals_type
-   USE input_val_types,                 ONLY: val_get,&
-                                              val_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE message_passing,                 ONLY: mp_para_env_type
@@ -38,8 +30,7 @@ MODULE xtb_parameters
                                               ptable
    USE physcon,                         ONLY: bohr,&
                                               evolt
-   USE string_utilities,                ONLY: remove_word,&
-                                              uppercase
+   USE string_utilities,                ONLY: uppercase
    USE xtb_types,                       ONLY: xtb_atom_type
 #include "./base/base_uses.f90"
 
@@ -59,7 +50,7 @@ MODULE xtb_parameters
 !&<
    ! Element Valence
    INTEGER, DIMENSION(0:nelem), &
-     PARAMETER, PRIVATE :: zval = (/-1, & !    0
+     PARAMETER, PRIVATE :: zval = [-1, & !    0
                                      1, 2, & !    2
                                      1, 2, 3, 4, 5, 6, 7, 8, & !   10
                                      1, 2, 3, 4, 5, 6, 7, 8, & !   18
@@ -67,13 +58,13 @@ MODULE xtb_parameters
                                      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, & !   54
                                      1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, &
                                      4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, & !   86
-                                    -1, -1, -1, 4, -1, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1/)
+                                    -1, -1, -1, 4, -1, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
 !&>
 
 !&<
    ! Element Pauling Electronegativity
    REAL(KIND=dp), DIMENSION(0:nelem), &
-      PARAMETER, PRIVATE :: eneg = (/0.00_dp, & ! 0
+      PARAMETER, PRIVATE :: eneg = [0.00_dp, & ! 0
                                      2.20_dp, 3.00_dp, & ! 2
                                      0.98_dp, 1.57_dp, 2.04_dp, 2.55_dp, 3.04_dp, 3.44_dp, 3.98_dp, 4.50_dp, & ! 10
                                      0.93_dp, 1.31_dp, 1.61_dp, 1.90_dp, 2.19_dp, 2.58_dp, 3.16_dp, 3.50_dp, & ! 18
@@ -89,12 +80,12 @@ MODULE xtb_parameters
                                      0.70_dp, 0.89_dp, 1.10_dp, &
                                      1.30_dp, 1.50_dp, 1.38_dp, 1.36_dp, 1.28_dp, 1.30_dp, 1.30_dp, 1.30_dp, &
                                      1.30_dp, 1.30_dp, 1.30_dp, 1.30_dp, 1.30_dp, 1.50_dp, & !  Actinides
-                                     1.50_dp, 1.50_dp, 1.50_dp/)
+                                     1.50_dp, 1.50_dp, 1.50_dp]
 !&>
 
 !&<
    ! Shell occupation
-   INTEGER, DIMENSION(1:5, 0:nelem) :: occupation = RESHAPE((/0,0,0,0,0, & ! 0
+   INTEGER, DIMENSION(1:5, 0:nelem) :: occupation = RESHAPE([0,0,0,0,0, & ! 0
       1,0,0,0,0,  2,0,0,0,0, & ! 2
       1,0,0,0,0,  2,0,0,0,0,  2,1,0,0,0,  2,2,0,0,0,  2,3,0,0,0,  2,4,0,0,0,  2,5,0,0,0,  2,6,0,0,0, & ! 10
       1,0,0,0,0,  2,0,0,0,0,  2,1,0,0,0,  2,2,0,0,0,  2,3,0,0,0,  2,4,0,0,0,  2,5,0,0,0,  2,6,0,0,0, & ! 18
@@ -110,7 +101,7 @@ MODULE xtb_parameters
       0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0, & !
       0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0, &
       0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0, & ! Actinides
-      0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0/), (/5, nelem+1/))
+      0,0,0,0,0,  0,0,0,0,0,  0,0,0,0,0], [5, nelem+1])
 !&>
 
 !&<
@@ -120,7 +111,7 @@ MODULE xtb_parameters
    ! edited by W. M. Haynes (CRC Press, Boca Raton, FL, 2010), pages 9-49-9-50;
    ! corrected Nov. 17, 2010 for the 92nd edition.
    REAL(KIND=dp), DIMENSION(0:nelem), &
-      PARAMETER, PRIVATE :: crad = (/0.00_dp, & ! 0
+      PARAMETER, PRIVATE :: crad = [0.00_dp, & ! 0
                                      0.32_dp, 0.37_dp, & ! 2
                                      1.30_dp, 0.99_dp, 0.84_dp, 0.75_dp, 0.71_dp, 0.64_dp, 0.60_dp, 0.62_dp, & ! 10
                                      1.60_dp, 1.40_dp, 1.24_dp, 1.14_dp, 1.09_dp, 1.04_dp, 1.00_dp, 1.01_dp, & ! 18
@@ -136,13 +127,13 @@ MODULE xtb_parameters
                                      2.42_dp, 2.11_dp, 2.01_dp, &
                                      1.90_dp, 1.84_dp, 1.83_dp, 1.80_dp, 1.80_dp, 1.51_dp, 0.96_dp, 1.54_dp, &
                                      1.83_dp, 1.50_dp, 1.50_dp, 1.50_dp, 1.50_dp, 1.50_dp, & !  Actinides
-                                     1.50_dp, 1.50_dp, 1.50_dp/)
+                                     1.50_dp, 1.50_dp, 1.50_dp]
 !&>
 
 !&<
    ! Charge Limits (Mulliken)
    REAL(KIND=dp), DIMENSION(0:nelem), &
-      PARAMETER, PRIVATE :: clmt = (/0.00_dp, & ! 0
+      PARAMETER, PRIVATE :: clmt = [0.00_dp, & ! 0
                                      1.05_dp, 1.25_dp, & ! 2
                                      1.05_dp, 2.05_dp, 3.00_dp, 4.00_dp, 3.00_dp, 2.00_dp, 1.25_dp, 1.00_dp, & ! 10
                                      1.05_dp, 2.05_dp, 3.00_dp, 4.00_dp, 3.00_dp, 2.00_dp, 1.25_dp, 1.00_dp, & ! 18
@@ -158,7 +149,7 @@ MODULE xtb_parameters
                                      1.05_dp, 2.05_dp, 3.00_dp, &
                                      3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, &
                                      3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, 3.00_dp, & !  Actinides
-                                     3.00_dp, 3.00_dp, 3.00_dp/)
+                                     3.00_dp, 3.00_dp, 3.00_dp]
 !&>
 
 ! *** Global parameters ***
@@ -167,10 +158,44 @@ MODULE xtb_parameters
 
 ! *** Public data types ***
 
-   PUBLIC :: xtb_parameters_init, xtb_parameters_read, xtb_parameters_set, init_xtb_basis, &
-             xtb_set_kab
+   PUBLIC :: xtb_parameters_init, xtb_parameters_set, init_xtb_basis, xtb_set_kab
+   PUBLIC :: metal, early3d, pp_gfn0
 
 CONTAINS
+
+! **************************************************************************************************
+!> \brief ...
+!> \param param ...
+!> \param gfn_type ...
+!> \param element_symbol ...
+!> \param parameter_file_path ...
+!> \param parameter_file_name ...
+!> \param para_env ...
+! **************************************************************************************************
+   SUBROUTINE xtb_parameters_init(param, gfn_type, element_symbol, &
+                                  parameter_file_path, parameter_file_name, &
+                                  para_env)
+
+      TYPE(xtb_atom_type), POINTER                       :: param
+      INTEGER, INTENT(IN)                                :: gfn_type
+      CHARACTER(LEN=2), INTENT(IN)                       :: element_symbol
+      CHARACTER(LEN=*), INTENT(IN)                       :: parameter_file_path, parameter_file_name
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+
+      SELECT CASE (gfn_type)
+      CASE (0)
+         CALL xtb0_parameters_init(param, element_symbol, parameter_file_path, &
+                                   parameter_file_name, para_env)
+      CASE (1)
+         CALL xtb1_parameters_init(param, element_symbol, parameter_file_path, &
+                                   parameter_file_name, para_env)
+      CASE (2)
+         CPABORT("gfn_type = 2 not yet supported")
+      CASE DEFAULT
+         CPABORT("Wrong gfn_type")
+      END SELECT
+
+   END SUBROUTINE xtb_parameters_init
 
 ! **************************************************************************************************
 !> \brief ...
@@ -180,66 +205,100 @@ CONTAINS
 !> \param parameter_file_name ...
 !> \param para_env ...
 ! **************************************************************************************************
-   SUBROUTINE xtb_parameters_init(param, element_symbol, parameter_file_path, parameter_file_name, &
-                                  para_env)
+   SUBROUTINE xtb0_parameters_init(param, element_symbol, parameter_file_path, parameter_file_name, &
+                                   para_env)
 
       TYPE(xtb_atom_type), POINTER                       :: param
       CHARACTER(LEN=2), INTENT(IN)                       :: element_symbol
       CHARACTER(LEN=*), INTENT(IN)                       :: parameter_file_path, parameter_file_name
       TYPE(mp_para_env_type), POINTER                    :: para_env
 
-      CHARACTER(len=2)                                   :: enam, esym
-      CHARACTER(len=default_string_length)               :: aname, filename
-      INTEGER                                            :: i, ia, l
+      CHARACTER(len=2)                                   :: esym
+      CHARACTER(len=default_string_length)               :: aname, atag, filename
+      INTEGER                                            :: i, l, zin, znum
       LOGICAL                                            :: at_end, found
       TYPE(cp_parser_type)                               :: parser
 
       filename = ADJUSTL(TRIM(parameter_file_path))//ADJUSTL(TRIM(parameter_file_name))
-      CALL parser_create(parser, filename, para_env=para_env)
+      CALL parser_create(parser, filename, apply_preprocessing=.FALSE., para_env=para_env)
       found = .FALSE.
+      znum = 0
+      CALL get_ptable_info(element_symbol, znum)
       DO
          at_end = .FALSE.
          CALL parser_get_next_line(parser, 1, at_end)
          IF (at_end) EXIT
          CALL parser_get_object(parser, aname)
-         enam = aname
-         esym = element_symbol
-         CALL uppercase(enam)
-         CALL uppercase(esym)
-         IF (enam == esym) THEN
-            found = .TRUE.
-            CALL parser_get_object(parser, param%eta)
-            CALL parser_get_object(parser, param%xgamma)
-            CALL parser_get_object(parser, param%alpha)
-            CALL parser_get_object(parser, param%zneff)
-            DO i = 1, 5
-               CALL parser_get_object(parser, aname)
-               ia = ICHAR(aname(1:1))
-               IF (ia >= 49 .AND. ia <= 57) THEN
-                  CALL parser_get_object(parser, param%kpoly(i))
-                  CALL parser_get_object(parser, param%kappa(i))
-                  CALL parser_get_object(parser, param%hen(i))
-                  CALL parser_get_object(parser, param%zeta(i))
-                  param%nshell = i
-                  param%nval(i) = ia - 48
-                  SELECT CASE (aname(2:2))
-                  CASE ("s", "S")
-                     param%lval(i) = 0
-                  CASE ("p", "P")
-                     param%lval(i) = 1
-                  CASE ("d", "D")
-                     param%lval(i) = 2
-                  CASE ("f", "F")
-                     param%lval(i) = 3
-                  CASE DEFAULT
-                     CPABORT("xTB PARAMETER ERROR")
-                  END SELECT
+         CALL uppercase(aname)
+         IF (aname == "$Z") THEN
+            CALL parser_get_object(parser, zin)
+            IF (zin == znum) THEN
+               found = .TRUE.
+               DO
                   CALL parser_get_next_line(parser, 1, at_end)
-                  IF (at_end) EXIT
-               ELSE
-                  EXIT
-               END IF
-            END DO
+                  IF (at_end) THEN
+                     CPABORT("Incomplete xTB parameter file")
+                  END IF
+                  CALL parser_get_object(parser, aname)
+                  CALL uppercase(aname)
+                  SELECT CASE (aname)
+                  CASE ("AO")
+                     CALL parser_get_object(parser, atag)
+                     CALL xtb_get_shells(atag, param%nshell, param%nval, param%lval)
+                  CASE ("LEV")
+                     DO i = 1, param%nshell
+                        CALL parser_get_object(parser, param%hen(i))
+                     END DO
+                  CASE ("EXP")
+                     DO i = 1, param%nshell
+                        CALL parser_get_object(parser, param%zeta(i))
+                     END DO
+                  CASE ("EN")
+                     CALL parser_get_object(parser, param%en)
+                  CASE ("GAM")
+                     CALL parser_get_object(parser, param%eta)
+                  CASE ("KQAT2")
+                     CALL parser_get_object(parser, param%kqat2)
+                  CASE ("KCNS")
+                     CALL parser_get_object(parser, param%kcn(1))
+                     param%kcn(1) = param%kcn(1)*0.1_dp !from orig xtb code
+                  CASE ("KCNP")
+                     CALL parser_get_object(parser, param%kcn(2))
+                     param%kcn(2) = param%kcn(2)*0.1_dp !from orig xtb code
+                  CASE ("KCND")
+                     CALL parser_get_object(parser, param%kcn(3))
+                     param%kcn(3) = param%kcn(3)*0.1_dp !from orig xtb code
+                  CASE ("REPA")
+                     CALL parser_get_object(parser, param%alpha)
+                  CASE ("REPB")
+                     CALL parser_get_object(parser, param%zneff)
+                  CASE ("POLYS")
+                     CALL parser_get_object(parser, param%kpoly(1))
+                  CASE ("POLYP")
+                     CALL parser_get_object(parser, param%kpoly(2))
+                  CASE ("POLYD")
+                     CALL parser_get_object(parser, param%kpoly(3))
+                  CASE ("KQS")
+                     CALL parser_get_object(parser, param%kq(1))
+                  CASE ("KQP")
+                     CALL parser_get_object(parser, param%kq(2))
+                  CASE ("KQD")
+                     CALL parser_get_object(parser, param%kq(3))
+                  CASE ("XI")
+                     CALL parser_get_object(parser, param%xi)
+                  CASE ("KAPPA")
+                     CALL parser_get_object(parser, param%kappa0)
+                  CASE ("ALPG")
+                     CALL parser_get_object(parser, param%alpg)
+                  CASE ("$END")
+                     EXIT
+                  CASE DEFAULT
+                     CPABORT("Unknown parameter in xTB file")
+                  END SELECT
+               END DO
+            ELSE
+               CYCLE
+            END IF
             EXIT
          END IF
       END DO
@@ -247,16 +306,15 @@ CONTAINS
          param%typ = "STANDARD"
          param%symbol = element_symbol
          param%defined = .TRUE.
-         CALL get_ptable_info(element_symbol, number=ia)
-         param%z = ia
-         param%aname = ptable(ia)%name
+         param%z = znum
+         param%aname = ptable(znum)%name
          param%lmax = MAXVAL(param%lval(1:param%nshell))
          param%natorb = 0
          DO i = 1, param%nshell
             l = param%lval(i)
             param%natorb = param%natorb + (2*l + 1)
          END DO
-         param%zeff = zval(ia)
+         param%zeff = zval(znum)
       ELSE
          esym = element_symbol
          CALL uppercase(esym)
@@ -278,137 +336,131 @@ CONTAINS
       END IF
       CALL parser_release(parser)
 
-   END SUBROUTINE xtb_parameters_init
+   END SUBROUTINE xtb0_parameters_init
 
 ! **************************************************************************************************
-!> \brief Read atom parameters for xTB Hamiltonian from input file
+!> \brief ...
 !> \param param ...
 !> \param element_symbol ...
-!> \param xtb_section ...
+!> \param parameter_file_path ...
+!> \param parameter_file_name ...
+!> \param para_env ...
 ! **************************************************************************************************
-   SUBROUTINE xtb_parameters_read(param, element_symbol, xtb_section)
+   SUBROUTINE xtb1_parameters_init(param, element_symbol, parameter_file_path, parameter_file_name, &
+                                   para_env)
 
       TYPE(xtb_atom_type), POINTER                       :: param
       CHARACTER(LEN=2), INTENT(IN)                       :: element_symbol
-      TYPE(section_vals_type), POINTER                   :: xtb_section
+      CHARACTER(LEN=*), INTENT(IN)                       :: parameter_file_path, parameter_file_name
+      TYPE(mp_para_env_type), POINTER                    :: para_env
 
-      CHARACTER(LEN=2)                                   :: label
-      CHARACTER(len=20*default_string_length)            :: line_att
-      INTEGER                                            :: i, ia, k, l, nshell
-      LOGICAL                                            :: explicit, found, is_ok
-      TYPE(cp_sll_val_type), POINTER                     :: list
-      TYPE(section_vals_type), POINTER                   :: ap_section
-      TYPE(val_type), POINTER                            :: val
+      CHARACTER(len=2)                                   :: esym
+      CHARACTER(len=default_string_length)               :: aname, atag, filename
+      INTEGER                                            :: i, l, zin, znum
+      LOGICAL                                            :: at_end, found
+      TYPE(cp_parser_type)                               :: parser
 
-      !
-      ! This could probably be done nicer
-      !
-      NULLIFY (list, val)
-      ap_section => section_vals_get_subs_vals(xtb_section, "ATOM_PARAMETER")
-      CALL section_vals_get(ap_section, explicit=explicit)
-      IF (explicit) THEN
-         CALL section_vals_list_get(ap_section, "_DEFAULT_KEYWORD_", list=list)
-         found = .FALSE.
-         nshell = 0
-         DO
-            is_ok = cp_sll_val_next(list, val)
-            IF (.NOT. is_ok) EXIT
-            CALL val_get(val, c_val=line_att)
-            IF (found) THEN
-               READ (line_att, *) label
-               CALL remove_word(line_att)
-               ia = ICHAR(label(1:1))
-               IF (ia >= 49 .AND. ia <= 57) THEN
-                  nshell = nshell + 1
-                  k = nshell
-                  param%nval(k) = ia - 48
-                  SELECT CASE (label(2:2))
-                  CASE ("s", "S")
-                     param%lval(k) = 0
-                  CASE ("p", "P")
-                     param%lval(k) = 1
-                  CASE ("d", "D")
-                     param%lval(k) = 2
-                  CASE ("f", "F")
-                     param%lval(k) = 3
+      filename = ADJUSTL(TRIM(parameter_file_path))//ADJUSTL(TRIM(parameter_file_name))
+      CALL parser_create(parser, filename, apply_preprocessing=.FALSE., para_env=para_env)
+      found = .FALSE.
+      znum = 0
+      CALL get_ptable_info(element_symbol, znum)
+      DO
+         at_end = .FALSE.
+         CALL parser_get_next_line(parser, 1, at_end)
+         IF (at_end) EXIT
+         CALL parser_get_object(parser, aname)
+         CALL uppercase(aname)
+         IF (aname == "$Z") THEN
+            CALL parser_get_object(parser, zin)
+            IF (zin == znum) THEN
+               found = .TRUE.
+               DO
+                  CALL parser_get_next_line(parser, 1, at_end)
+                  IF (at_end) THEN
+                     CPABORT("Incomplete xTB parameter file")
+                  END IF
+                  CALL parser_get_object(parser, aname)
+                  CALL uppercase(aname)
+                  SELECT CASE (aname)
+                  CASE ("AO")
+                     CALL parser_get_object(parser, atag)
+                     CALL xtb_get_shells(atag, param%nshell, param%nval, param%lval)
+                  CASE ("LEV")
+                     DO i = 1, param%nshell
+                        CALL parser_get_object(parser, param%hen(i))
+                     END DO
+                  CASE ("EXP")
+                     DO i = 1, param%nshell
+                        CALL parser_get_object(parser, param%zeta(i))
+                     END DO
+                  CASE ("GAM")
+                     CALL parser_get_object(parser, param%eta)
+                  CASE ("GAM3")
+                     CALL parser_get_object(parser, param%xgamma)
+                  CASE ("CXB")
+                     CALL parser_get_object(parser, param%kx)
+                  CASE ("REPA")
+                     CALL parser_get_object(parser, param%alpha)
+                  CASE ("REPB")
+                     CALL parser_get_object(parser, param%zneff)
+                  CASE ("POLYS")
+                     CALL parser_get_object(parser, param%kpoly(1))
+                  CASE ("POLYP")
+                     CALL parser_get_object(parser, param%kpoly(2))
+                  CASE ("POLYD")
+                     CALL parser_get_object(parser, param%kpoly(3))
+                  CASE ("LPARP")
+                     CALL parser_get_object(parser, param%kappa(2))
+                  CASE ("LPARD")
+                     CALL parser_get_object(parser, param%kappa(3))
+                  CASE ("$END")
+                     EXIT
                   CASE DEFAULT
-                     CPABORT("xTB PARAMETER ERROR")
+                     CPABORT("Unknown parameter in xTB file")
                   END SELECT
-                  !
-                  READ (line_att, *) param%kpoly(k)
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%kappa(k)
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%hen(k)
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%zeta(k)
-                  CALL remove_word(line_att)
-               ELSE
-                  EXIT
-               END IF
+               END DO
             ELSE
-               READ (line_att, *) label
-               CALL remove_word(line_att)
-               IF (label == element_symbol) THEN
-                  found = .TRUE.
-                  nshell = nshell + 1
-                  k = nshell
-                  READ (line_att, *) param%eta
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%xgamma
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%alpha
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%zneff
-                  CALL remove_word(line_att)
-                  READ (line_att, *) label
-                  CALL remove_word(line_att)
-                  ia = ICHAR(label(1:1))
-                  CPASSERT((ia >= 49 .AND. ia <= 57))
-                  param%nval(k) = ia - 48
-                  SELECT CASE (label(2:2))
-                  CASE ("s", "S")
-                     param%lval(k) = 0
-                  CASE ("p", "P")
-                     param%lval(k) = 1
-                  CASE ("d", "D")
-                     param%lval(k) = 2
-                  CASE ("f", "F")
-                     param%lval(k) = 3
-                  CASE DEFAULT
-                     CPABORT("xTB PARAMETER ERROR")
-                  END SELECT
-                  !
-                  READ (line_att, *) param%kpoly(k)
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%kappa(k)
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%hen(k)
-                  CALL remove_word(line_att)
-                  READ (line_att, *) param%zeta(k)
-                  CALL remove_word(line_att)
-               END IF
+               CYCLE
             END IF
+            EXIT
+         END IF
+      END DO
+      IF (found) THEN
+         param%typ = "STANDARD"
+         param%symbol = element_symbol
+         param%defined = .TRUE.
+         param%z = znum
+         param%aname = ptable(znum)%name
+         param%lmax = MAXVAL(param%lval(1:param%nshell))
+         param%natorb = 0
+         DO i = 1, param%nshell
+            l = param%lval(i)
+            param%natorb = param%natorb + (2*l + 1)
          END DO
-         IF (found) THEN
-            param%typ = "STANDARD"
+         param%zeff = zval(znum)
+      ELSE
+         esym = element_symbol
+         CALL uppercase(esym)
+         IF ("X " == esym) THEN
+            param%typ = "GHOST"
             param%symbol = element_symbol
-            param%defined = .TRUE.
-            CALL get_ptable_info(element_symbol, number=ia)
-            param%z = ia
-            param%aname = ptable(ia)%name
-            param%lmax = MAXVAL(param%lval(1:param%nshell))
+            param%defined = .FALSE.
+            param%z = 0
+            param%aname = "X "
+            param%lmax = 0
             param%natorb = 0
-            param%nshell = nshell
-            DO i = 1, param%nshell
-               l = param%lval(i)
-               param%natorb = param%natorb + (2*l + 1)
-            END DO
-            param%zeff = zval(ia)
+            param%nshell = 0
+            param%zeff = 0.0_dp
+         ELSE
+            param%defined = .FALSE.
+            CALL cp_warn(__LOCATION__, "xTB parameters for element "//element_symbol// &
+                         " were not found in the parameter file "//ADJUSTL(TRIM(filename)))
          END IF
       END IF
+      CALL parser_release(parser)
 
-   END SUBROUTINE xtb_parameters_read
+   END SUBROUTINE xtb1_parameters_init
 
 ! **************************************************************************************************
 !> \brief Read atom parameters for xTB Hamiltonian from input file
@@ -437,6 +489,7 @@ CONTAINS
          i = param%z
          ! Electronegativity
          param%electronegativity = eneg(i)
+         IF (param%en == 0.0_dp) param%en = eneg(i)
          ! covalent radius
          param%rcov = crad(i)*bohr
          ! shell occupances
@@ -453,19 +506,16 @@ CONTAINS
          param%kappa(:) = 0.1_dp*param%kappa(:)
          ! we have 1/6 g * q**3 (not 1/3)
          param%xgamma = -2.0_dp*param%xgamma
-         ! we need kappa l-indexed
-         kp(:) = param%kappa(:)
-         param%kappa(:) = 0.0_dp
+         ! we need kpoly in shell order
+         kp(:) = param%kpoly(:)
+         param%kpoly(:) = 0.0_dp
          DO is = 1, param%nshell
             l = param%lval(is)
-            IF (param%kappa(l + 1) == 0.0_dp) THEN
-               param%kappa(l + 1) = kp(is)
-            ELSE
-               CPASSERT(ABS(param%kappa(l + 1) - kp(is)) < 1.e-10_dp)
-            END IF
+            param%kpoly(is) = kp(l + 1)
          END DO
          ! kx
-         IF (param%kx < -10._dp) THEN
+         param%kx = 0.1_dp*param%kx
+         IF (param%kx < -5._dp) THEN
             ! use defaults
             SELECT CASE (param%z)
             CASE DEFAULT
@@ -565,7 +615,7 @@ CONTAINS
       kab = 1.0_dp
       custom = .FALSE.
 
-      IF (xtb_control%kab_nval .GT. 0) THEN
+      IF (xtb_control%kab_nval > 0) THEN
          DO j = 1, xtb_control%kab_nval
             IF ((za == xtb_control%kab_types(1, j) .AND. &
                  zb == xtb_control%kab_types(2, j)) .OR. &
@@ -634,6 +684,99 @@ CONTAINS
       END IF
 
    END FUNCTION xtb_set_kab
+
+! **************************************************************************************************
+!> \brief ...
+!> \param atag ...
+!> \param nshell ...
+!> \param nval ...
+!> \param lval ...
+!> \return ...
+! **************************************************************************************************
+   SUBROUTINE xtb_get_shells(atag, nshell, nval, lval)
+      CHARACTER(len=*)                                   :: atag
+      INTEGER                                            :: nshell
+      INTEGER, DIMENSION(:)                              :: nval, lval
+
+      CHARACTER(LEN=1)                                   :: ltag
+      CHARACTER(LEN=10)                                  :: aotag
+      INTEGER                                            :: i, j
+
+      aotag = ADJUSTL(TRIM(atag))
+      nshell = LEN(TRIM(aotag))/2
+      DO i = 1, nshell
+         j = (i - 1)*2 + 1
+         READ (aotag(j:j), FMT="(i1)") nval(i)
+         READ (aotag(j + 1:j + 1), FMT="(A1)") ltag
+         CALL uppercase(ltag)
+         SELECT CASE (ltag)
+         CASE ("S")
+            lval(i) = 0
+         CASE ("P")
+            lval(i) = 1
+         CASE ("D")
+            lval(i) = 2
+         CASE DEFAULT
+         END SELECT
+      END DO
+
+   END SUBROUTINE xtb_get_shells
+
+! **************************************************************************************************
+!> \brief ...
+!> \param z ...
+!> \return ...
+! **************************************************************************************************
+   FUNCTION metal(z) RESULT(ismetal)
+      INTEGER                                            :: z
+      LOGICAL                                            :: ismetal
+
+      SELECT CASE (z)
+      CASE DEFAULT
+         ismetal = .TRUE.
+      CASE (1:2, 6:10, 14:18, 32:36, 50:54, 82:86)
+         ismetal = .FALSE.
+      END SELECT
+
+   END FUNCTION metal
+
+! **************************************************************************************************
+!> \brief ...
+!> \param z ...
+!> \return ...
+! **************************************************************************************************
+   FUNCTION early3d(z) RESULT(isearly3d)
+      INTEGER                                            :: z
+      LOGICAL                                            :: isearly3d
+
+      isearly3d = .FALSE.
+      IF (z >= 21 .AND. z <= 24) isearly3d = .TRUE.
+
+   END FUNCTION early3d
+
+! **************************************************************************************************
+!> \brief ...
+!> \param za ...
+!> \param zb ...
+!> \return ...
+! **************************************************************************************************
+   FUNCTION pp_gfn0(za, zb) RESULT(pparm)
+      INTEGER                                            :: za, zb
+      REAL(KIND=dp)                                      :: pparm
+
+      pparm = 1.0_dp
+      IF ((za > 20 .AND. za < 30) .OR. (za > 38 .AND. za < 48) .OR. (za > 56 .AND. za < 80)) THEN
+         IF ((zb > 20 .AND. zb < 30) .OR. (zb > 38 .AND. zb < 48) .OR. (zb > 56 .AND. zb < 80)) THEN
+            pparm = 1.1_dp
+            IF (za == 29 .OR. za == 47 .OR. za == 79) THEN
+               IF (za == 29 .OR. za == 47 .OR. za == 79) THEN
+                  pparm = 0.9_dp
+               END IF
+            END IF
+         END IF
+      END IF
+
+   END FUNCTION pp_gfn0
 
 END MODULE xtb_parameters
 

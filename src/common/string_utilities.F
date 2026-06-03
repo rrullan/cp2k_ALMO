@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,7 +23,7 @@ MODULE string_utilities
 
    PRIVATE
 
-   CHARACTER(LEN=1), PARAMETER :: backslash = '\\'
+   CHARACTER(LEN=1), PARAMETER :: backslash = ACHAR(92)
    CHARACTER(LEN=1), PARAMETER :: star = '*'
    CHARACTER(LEN=1), PARAMETER :: question = '?'
    CHARACTER(LEN=1), PARAMETER :: newline = ACHAR(10)
@@ -32,6 +32,7 @@ MODULE string_utilities
              compress, &
              integer_to_string, &
              is_whitespace, &
+             lowercase, &
              remove_word, &
              s2a, a2s, &
              str_comp, &
@@ -150,7 +151,7 @@ CONTAINS
 !>      11.2004 created [Joost VandeVondele ]
 !> \note
 !>     can be used instead of the illegal (/"12","1234"/) generating
-!>     s2a("12","1234").EQ.(/"12  ","1234"/)
+!>     s2a("12","1234")==(/"12  ","1234"/)
 ! **************************************************************************************************
    PURE FUNCTION s2a_1(s1) RESULT(a)
       CHARACTER(LEN=*), INTENT(IN)                       :: s1

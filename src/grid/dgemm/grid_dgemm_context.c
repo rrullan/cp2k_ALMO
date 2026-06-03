@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -92,6 +92,7 @@ void update_atoms_position(const int natoms,
           realloc(data->atom_positions, 3 * natoms * sizeof(double));
     }
   }
+  assert(data->atom_positions != NULL);
 
   data->natoms = natoms;
 
@@ -119,6 +120,7 @@ void update_atoms_kinds(const int natoms, const int *atoms_kinds,
       data->atom_kinds = realloc(data->atom_kinds, natoms * sizeof(int));
     }
   }
+  assert(data->atom_kinds != NULL);
   // data->natoms is initialized before calling this function
   if (data->natoms)
     memcpy(data->atom_kinds, atoms_kinds, sizeof(int) * natoms);
@@ -142,6 +144,7 @@ void update_block_offsets(const int nblocks, const int *const block_offsets,
       data->block_offsets = realloc(data->block_offsets, sizeof(int) * nblocks);
     }
   }
+  assert(data->block_offsets != NULL);
 
   data->nblocks = nblocks;
   data->nblocks_total = imax(data->nblocks_total, nblocks);
@@ -159,6 +162,7 @@ void update_basis_set(const int nkinds, const grid_basis_set **const basis_sets,
           realloc(data->basis_sets, nkinds * sizeof(grid_basis_set *));
     }
   }
+  assert(data->basis_sets != NULL);
   data->nkinds = nkinds;
   data->nkinds_total = imax(data->nkinds_total, nkinds);
   memcpy(data->basis_sets, basis_sets, nkinds * sizeof(grid_basis_set *));
@@ -193,9 +197,11 @@ void update_task_lists(const int nlevels, const int ntasks,
     if (ctx->nlevels_total < nlevels) {
       /* save the address of the full task list. NULL when completly empty */
       ctx->tasks = realloc(ctx->tasks, nlevels * sizeof(_task *));
+      assert(ctx->tasks != NULL);
     }
     if (ctx->ntasks_total < ntasks) {
       ctx->tasks[0] = realloc(ctx->tasks[0], ntasks * sizeof(_task));
+      assert(ctx->tasks[0] != NULL);
     }
   }
 
@@ -214,18 +220,10 @@ void update_task_lists(const int nlevels, const int ntasks,
     ctx->tasks[i] = ctx->tasks[i - 1] + ctx->tasks_per_level[i - 1];
   }
 
-  int prev_block_num = -1;
-  int prev_iset = -1;
-  int prev_jset = -1;
-  int prev_level = -1;
-  _task *task = ctx->tasks[0];
+  _task *const tasks = ctx->tasks[0];
+#pragma omp parallel for schedule(static) if (ntasks > GRID_OMP_MIN_ITERATIONS)
   for (int i = 0; i < ntasks; i++) {
-    if (prev_level != (level_list[i] - 1)) {
-      prev_level = level_list[i] - 1;
-      prev_block_num = -1;
-      prev_iset = -1;
-      prev_jset = -1;
-    }
+    _task *const task = &tasks[i];
     task->level = level_list[i] - 1;
     task->iatom = iatom_list[i] - 1;
     task->jatom = jatom_list[i] - 1;
@@ -265,8 +263,6 @@ void update_task_lists(const int nlevels, const int ntasks,
     task->prefactor = exp(-task->zeta[0] * f * rab2);
     task->zetp = zetp;
 
-    const int block_num = task->block_num;
-
     for (int i = 0; i < 3; i++) {
       task->ra[i] = ra[i];
       task->rp[i] = ra[i] + f * task->rab[i];
@@ -278,19 +274,13 @@ void update_task_lists(const int nlevels, const int ntasks,
     task->lmin[0] = ibasis->lmin[iset];
     task->lmin[1] = jbasis->lmin[jset];
 
-    if ((block_num != prev_block_num) || (iset != prev_iset) ||
-        (jset != prev_jset)) {
-      task->update_block_ = true;
-      prev_block_num = block_num;
-      prev_iset = iset;
-      prev_jset = jset;
-    } else {
-      task->update_block_ = false;
-    }
+    task->update_block_ = i == 0 || level_list[i] != level_list[i - 1] ||
+                          block_num_list[i] != block_num_list[i - 1] ||
+                          iset_list[i] != iset_list[i - 1] ||
+                          jset_list[i] != jset_list[i - 1];
 
     task->offset[0] = ipgf * ncoseta;
     task->offset[1] = jpgf * ncosetb;
-    task++;
   }
 
   // Find largest Cartesian subblock size.
@@ -344,6 +334,7 @@ void update_grid(const int nlevels, grid_context *ctx) {
       ctx->grid = realloc(ctx->grid, sizeof(tensor) * nlevels);
     }
   }
+  assert(ctx->grid != NULL);
 
   ctx->nlevels_total = imax(ctx->nlevels_total, nlevels);
   ctx->nlevels = nlevels;
@@ -447,10 +438,12 @@ void initialize_grid_context_on_gpu(void *ptr, const int number_of_devices,
 
   ctx->number_of_devices = number_of_devices;
   ctx->queue_length = 8192;
-  if (ctx->device_id == NULL)
+  if (ctx->device_id == NULL) {
     ctx->device_id = malloc(sizeof(int) * number_of_devices);
-  else
+  } else {
     ctx->device_id = realloc(ctx->device_id, sizeof(int) * number_of_devices);
+  }
+  assert(ctx->device_id != NULL);
 
   memcpy(ctx->device_id, device_id, sizeof(int) * number_of_devices);
 }

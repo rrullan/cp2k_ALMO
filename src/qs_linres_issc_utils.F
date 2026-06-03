@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,6 +22,14 @@ MODULE qs_linres_issc_utils
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_convert_offsets_to_sizes,&
+                                              dbcsr_copy,&
+                                              dbcsr_create,&
+                                              dbcsr_distribution_type,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type_antisymmetric,&
+                                              dbcsr_type_symmetric
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
@@ -44,14 +52,6 @@ MODULE qs_linres_issc_utils
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_convert_offsets_to_sizes,&
-                                              dbcsr_copy,&
-                                              dbcsr_create,&
-                                              dbcsr_distribution_type,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type_antisymmetric,&
-                                              dbcsr_type_symmetric
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -529,7 +529,7 @@ CONTAINS
             !
             ! FC term
             !
-            IF (do_fc .AND. iatom .NE. jatom) THEN
+            IF (do_fc .AND. iatom /= jatom) THEN
                !
                ! build the integral for the jatom
                CALL dbcsr_set(matrix_fc(1)%matrix, 0.0_dp)
@@ -550,7 +550,7 @@ CONTAINS
             !
             ! SD term
             !
-            IF (do_sd .AND. iatom .NE. jatom) THEN
+            IF (do_sd .AND. iatom /= jatom) THEN
                !
                ! build the integral for the jatom
                CALL dbcsr_set(matrix_efg(1)%matrix, 0.0_dp)
@@ -577,7 +577,7 @@ CONTAINS
             !
             ! PSO term
             !
-            IF (do_pso .AND. iatom .NE. jatom) THEN
+            IF (do_pso .AND. iatom /= jatom) THEN
                !
                ! build the integral for the jatom
                CALL dbcsr_set(matrix_pso(1)%matrix, 0.0_dp)
@@ -599,7 +599,7 @@ CONTAINS
             ! DSO term
             !
             !>>>>> for debugging we compute here the polarizability and NOT the DSO term!
-            IF (do_dso .AND. iatom .EQ. natom .AND. jatom .EQ. natom) THEN
+            IF (do_dso .AND. iatom == natom .AND. jatom == natom) THEN
                !
                ! build the integral for the jatom
                !CALL dbcsr_set(matrix_dso(1)%matrix,0.0_dp)
@@ -715,7 +715,7 @@ CONTAINS
                   atom_kind_j => particle_set(jatom)%atomic_kind
                   CALL get_atomic_kind(atom_kind_j, name=name_j, element_symbol=element_symbol_j)
                   !
-                  IF (iatom .EQ. jatom .AND. .NOT. do_dso) CYCLE
+                  IF (iatom == jatom .AND. .NOT. do_dso) CYCLE
                   !
                   !
                   ! FC
@@ -877,7 +877,7 @@ CONTAINS
       !
       IF (.NOT. ASSOCIATED(issc_env%issc_on_atom_list)) THEN
          ALLOCATE (issc_env%issc_on_atom_list(natom), STAT=istat)
-         CPASSERT(istat .EQ. 0)
+         CPASSERT(istat == 0)
          DO iatom = 1, natom
             issc_env%issc_on_atom_list(iatom) = iatom
          END DO
@@ -942,7 +942,7 @@ CONTAINS
                         name="efg (3xx-rr)/3", &
                         dist=dbcsr_dist, matrix_type=dbcsr_type_symmetric, &
                         row_blk_size=row_blk_sizes, col_blk_size=row_blk_sizes, &
-                        nze=0, mutable_work=.TRUE.)
+                        mutable_work=.TRUE.)
       CALL cp_dbcsr_alloc_block_from_nbl(issc_env%matrix_efg(1)%matrix, sab_orb)
 
       ALLOCATE (issc_env%matrix_efg(2)%matrix, &
@@ -973,7 +973,7 @@ CONTAINS
                         name="pso x", &
                         dist=dbcsr_dist, matrix_type=dbcsr_type_antisymmetric, &
                         row_blk_size=row_blk_sizes, col_blk_size=row_blk_sizes, &
-                        nze=0, mutable_work=.TRUE.)
+                        mutable_work=.TRUE.)
       CALL cp_dbcsr_alloc_block_from_nbl(issc_env%matrix_pso(1)%matrix, sab_orb)
 
       ALLOCATE (issc_env%matrix_pso(2)%matrix, issc_env%matrix_pso(3)%matrix)

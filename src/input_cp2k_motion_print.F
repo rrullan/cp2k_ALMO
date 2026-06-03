@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,6 +19,7 @@ MODULE input_cp2k_motion_print
    USE input_constants,                 ONLY: dump_atomic,&
                                               dump_dcd,&
                                               dump_dcd_aligned_cell,&
+                                              dump_extxyz,&
                                               dump_pdb,&
                                               dump_xmol
    USE input_cp2k_subsys,               ONLY: create_structure_data_section
@@ -30,8 +31,7 @@ MODULE input_cp2k_motion_print
                                               section_create,&
                                               section_release,&
                                               section_type
-   USE string_utilities,                ONLY: newline,&
-                                              s2a
+   USE string_utilities,                ONLY: s2a
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -62,7 +62,7 @@ CONTAINS
                           n_keywords=1, n_subsections=1, repeats=.TRUE.)
 
       CALL keyword_create(keyword, __LOCATION__, name="MEMORY_INFO", &
-                          variants=(/"MEMORY"/), &
+                          variants=["MEMORY"], &
                           description="Whether overall memory usage should be sampled and printed "// &
                           "at each MD/Optimization step.", &
                           usage="MEMORY_INFO LOGICAL", &
@@ -108,12 +108,13 @@ CONTAINS
       CALL section_release(print_key)
 
       CALL cp_print_key_section_create(print_key, __LOCATION__, "VELOCITIES", &
-                                       description="Controls the output of the velocities."//newline// &
-                                       "The default unit for velocities is bohr/au_time. The au_time is derived from the "// &
-                                       "hbar value (1.054e-34 J*sec) and the value of the hartree unit of energy "// &
-                                       "(27.21 eV or 4.359e-18 J) as hbar/Ehartree = 2.42e-17 sec = 0.0242 fs. "// &
-                                       "Having an atom with a mass m in AMU the kinetic energy 1/2mv^2 will be obtained "// &
-                                       "in Hartree (i.e. au) multiplying by 911.447 .", &
+                                       description="Controls the output of the atomic velocities. "// &
+                                       "The default unit for the atomic velocities $v$ is bohr/au_time. "// &
+                                       "The kinetic energy $K_i$ in [hartree] of an atom $i$ with mass $m_i$ in "// &
+                                       "atomic mass units [amu] (or just [u]) and velocity $v_i$ can be obtained by "// &
+                                       "$K_i = \frac{1}{2}f_u\,m_i\,v_i^2$ with $f_u = 1822.888$ as conversion factor "// &
+                                       "from [u] to [a.u.]. $f_u$ is printed in full precision in the top of the CP2K "// &
+                                       "output for print level MEDIUM or higher.", &
                                        print_level=high_print_level, common_iter_levels=1, &
                                        filename="", unit_str="bohr*au_t^-1")
       CALL add_format_keyword(keyword, print_key, pos=.FALSE., &
@@ -140,6 +141,35 @@ CONTAINS
       CALL section_release(print_key)
 
       CALL create_structure_data_section(print_key)
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "FINAL_STRUCTURE", &
+                                       description="Controls the dumping of the final "// &
+                                       "geometry and cell for optimization tasks. ", &
+                                       print_level=low_print_level, filename="FINAL")
+
+      CALL keyword_create(keyword, __LOCATION__, name="PRINT_CIF", &
+                          description="Print the final structure as CIF. Currently the "// &
+                          "structure will always be dumped with the space "// &
+                          "group `P 1` and a single symmetry-equivalent "// &
+                          "position `x, y, z` for all of the atoms.", &
+                          usage="PRINT_CIF T", default_l_val=.TRUE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="PRINT_XYZ", &
+                          description="Print the final structure as XYZ. The cell "// &
+                          "information is available in the comment line according "// &
+                          "to the extended XYZ specification as the `Lattice=...` "// &
+                          "field, and the unit is angstrom for both the cell vectors "// &
+                          "and the atomic coordinates.", &
+                          usage="PRINT_XYZ T", default_l_val=.TRUE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
@@ -206,7 +236,7 @@ CONTAINS
       CALL cp_print_key_section_create(print_key, __LOCATION__, "RESTART", &
                                        description="Controls the dumping of the restart file during runs. "// &
                                        "By default keeps a short history of three restarts. See also RESTART_HISTORY", &
-                                       each_iter_names=s2a("MD"), each_iter_values=(/20/), &
+                                       each_iter_names=s2a("MD"), each_iter_values=[20], &
                                        print_level=silent_print_level, common_iter_levels=1, &
                                        add_last=add_last_numeric, filename="")
 
@@ -237,7 +267,7 @@ CONTAINS
                                        description="Dumps unique restart files during the run keeping all of them. "// &
                                        "Most useful if recovery is needed at a later point.", &
                                        print_level=low_print_level, common_iter_levels=0, &
-                                       each_iter_names=s2a("MD", "GEO_OPT", "ROT_OPT"), each_iter_values=(/500, 500, 500/), &
+                                       each_iter_names=s2a("MD", "GEO_OPT", "ROT_OPT"), each_iter_values=[500, 500, 500], &
                                        filename="")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
@@ -274,10 +304,10 @@ CONTAINS
 
          CALL keyword_create( &
             keyword, __LOCATION__, name="FORMAT", &
-            description=description, usage="FORMAT (ATOMIC|DCD|PDB|XMOL|XYZ)", &
+            description=description, usage="FORMAT (ATOMIC|DCD|PDB|XMOL|XYZ|EXTXYZ)", &
             default_i_val=dump_xmol, &
-            enum_c_vals=s2a("ATOMIC", "DCD", "DCD_ALIGNED_CELL", "PDB", "XMOL", "XYZ"), &
-            enum_i_vals=(/dump_atomic, dump_dcd, dump_dcd_aligned_cell, dump_pdb, dump_xmol, dump_xmol/), &
+            enum_c_vals=s2a("ATOMIC", "DCD", "DCD_ALIGNED_CELL", "PDB", "XMOL", "XYZ", "EXTXYZ"), &
+            enum_i_vals=[dump_atomic, dump_dcd, dump_dcd_aligned_cell, dump_pdb, dump_xmol, dump_xmol, dump_extxyz], &
             enum_desc=s2a("Write only the coordinates X,Y,Z without element symbols to a formatted file", &
                           "Write the coordinates (no element labels) and the cell information to a binary file", &
                           "Like DCD, but the dumped coordinates refer to an aligned cell following the common convention: "// &
@@ -285,12 +315,15 @@ CONTAINS
                           "the *xy* plane. This allows the reconstruction of scaled coordinates from the DCD data only.", &
                           "Write the atomic information in PDB format to a formatted file", &
                           "Mostly known as XYZ format, provides in a formatted file: element_symbol X Y Z", &
-                          "Alias name for XMOL"))
+                          "Alias name for XMOL", &
+                          "Extended XYZ format including cell information. "// &
+                          "For details see [ASE](https://ase-lib.org/ase/io/formatoptions.html#extxyz) "// &
+                          "and [OVITO](https://www.ovito.org/manual/reference/file_formats/input/xyz.html)."))
          CALL section_add_keyword(section, keyword)
          CALL keyword_release(keyword)
 
          CALL keyword_create(keyword, __LOCATION__, name="CHARGE_OCCUP", &
-                             variants=(/"CHARGE_O"/), &
+                             variants=["CHARGE_O"], &
                              description="Write the MM charges to the OCCUP field of the PDB file", &
                              usage="CHARGE_OCCUP logical", &
                              default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -298,7 +331,7 @@ CONTAINS
          CALL keyword_release(keyword)
 
          CALL keyword_create(keyword, __LOCATION__, name="CHARGE_BETA", &
-                             variants=(/"CHARGE_B"/), &
+                             variants=["CHARGE_B"], &
                              description="Write the MM charges to the BETA field of the PDB file", &
                              usage="CHARGE_BETA logical", &
                              default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
@@ -315,14 +348,17 @@ CONTAINS
       ELSE
 
          CALL keyword_create(keyword, __LOCATION__, name="FORMAT", &
-                             description=description, usage="FORMAT (ATOMIC|DCD|XMOL|XYZ)", &
+                             description=description, usage="FORMAT (ATOMIC|DCD|XMOL|XYZ|EXTXYZ)", &
                              default_i_val=dump_xmol, &
-                             enum_c_vals=s2a("ATOMIC", "DCD", "XMOL", "XYZ"), &
-                             enum_i_vals=(/dump_atomic, dump_dcd, dump_xmol, dump_xmol/), &
+                             enum_c_vals=s2a("ATOMIC", "DCD", "XMOL", "XYZ", "EXTXYZ"), &
+                             enum_i_vals=[dump_atomic, dump_dcd, dump_xmol, dump_xmol, dump_extxyz], &
                              enum_desc=s2a("Write only the coordinates X,Y,Z without element symbols to a formatted file", &
                                            "Write the coordinates (no element labels) and the cell information to a binary file", &
                                            "Mostly known as XYZ format, provides in a formatted file: element_symbol X Y Z", &
-                                           "Alias name for XMOL"))
+                                           "Alias name for XMOL", &
+                                           "Extended XYZ format including cell information. "// &
+                                           "For details see [ASE](https://ase-lib.org/ase/io/formatoptions.html#extxyz) "// &
+                                           "and [OVITO](https://www.ovito.org/manual/reference/file_formats/input/xyz.html)."))
          CALL section_add_keyword(section, keyword)
          CALL keyword_release(keyword)
 
@@ -330,8 +366,8 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="PRINT_ATOM_KIND", &
                           description="Write the atom kind given in the subsys section instead of the element symbol. "// &
-                          "Only valid for the XMOL format.", &
-                          usage="PRINT_ELEMENT_NAME logical", &
+                          "Only valid for the XMOL and EXTXYZ format.", &
+                          usage="PRINT_ATOM_KIND logical", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)

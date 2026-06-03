@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -17,7 +17,7 @@
  * It is not needed to know what exact structure for the public interface.
  * Equivalent to private member in c++ class
  ******************************************************************************/
-typedef struct grid_context_ grid_dgemm_task_list;
+typedef void grid_dgemm_task_list;
 
 /*******************************************************************************
  * \brief Allocates a task list for the dgemm backend.

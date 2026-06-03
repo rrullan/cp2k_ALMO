@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,7 +20,7 @@ MODULE input_cp2k_force_eval
                                               medium_print_level
    USE cp_units,                        ONLY: cp_unit_to_cp2k
    USE input_constants,                 ONLY: &
-        do_eip, do_embed, do_fist, do_mixed, do_nnp, do_qmmm, do_qs, do_sirius, &
+        do_eip, do_embed, do_fist, do_ipi, do_mixed, do_nnp, do_qmmm, do_qs, do_sirius, &
         do_stress_analytical, do_stress_diagonal_anal, do_stress_diagonal_numer, do_stress_none, &
         do_stress_numerical, numerical
    USE input_cp2k_dft,                  ONLY: create_bsse_section,&
@@ -80,7 +80,8 @@ CONTAINS
       NULLIFY (subsection)
       NULLIFY (keyword)
       CALL keyword_create(keyword, __LOCATION__, name="METHOD", &
-                          description="Which method should be used to compute forces", &
+                          description="Selects the method used by this FORCE_EVAL section to compute energies, "// &
+                          "forces, and related properties.", &
                           usage="METHOD <STRING>", &
                           enum_c_vals=s2a("QS", &
                                           "SIRIUS", &
@@ -90,17 +91,19 @@ CONTAINS
                                           "QUICKSTEP", &
                                           "NNP", &
                                           "MIXED", &
-                                          "EMBED"), &
+                                          "EMBED", &
+                                          "IPI"), &
                           enum_desc=s2a("Alias for QUICKSTEP", &
                                         "PW DFT using the SIRIUS library", &
                                         "Molecular Mechanics", &
                                         "Hybrid quantum classical", &
                                         "Empirical Interatomic Potential", &
-                                        "Electronic structure methods (DFT, ...)", &
+                                        "Electronic structure methods in the Quickstep module, including GPW and GAPW DFT.", &
                                         "Neural Network Potentials", &
                                         "Use a combination of two of the above", &
-                                        "Perform an embedded calculation"), &
-                          enum_i_vals=(/do_qs, do_sirius, do_fist, do_qmmm, do_eip, do_qs, do_nnp, do_mixed, do_embed/), &
+                                        "Perform an embedded calculation", &
+                                        "Receive forces from an i-PI client"), &
+                          enum_i_vals=[do_qs, do_sirius, do_fist, do_qmmm, do_eip, do_qs, do_nnp, do_mixed, do_embed, do_ipi], &
                           default_i_val=do_qs)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -111,8 +114,8 @@ CONTAINS
                           usage="stress_tensor (NONE|ANALYTICAL|NUMERICAL|DIAGONAL_ANA|DIAGONAL_NUM)", &
                           default_i_val=do_stress_none, &
                           enum_c_vals=s2a("NONE", "ANALYTICAL", "NUMERICAL", "DIAGONAL_ANALYTICAL", "DIAGONAL_NUMERICAL"), &
-                          enum_i_vals=(/do_stress_none, do_stress_analytical, do_stress_numerical, &
-                                        do_stress_diagonal_anal, do_stress_diagonal_numer/), &
+                          enum_i_vals=[do_stress_none, do_stress_analytical, do_stress_numerical, &
+                                       do_stress_diagonal_anal, do_stress_diagonal_numer], &
                           enum_desc=s2a("Do not compute stress tensor", &
                                         "Compute the stress tensor analytically (if available).", &
                                         "Compute the stress tensor numerically.", &
@@ -294,17 +297,29 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(section))
 
-      CALL section_create(section, __LOCATION__, name="PRINT", &
+      CALL section_create(section, __LOCATION__, &
+                          name="PRINT", &
                           description="Properties that you want to output and that are common to all methods", &
-                          n_keywords=0, n_subsections=5, repeats=.FALSE.)
+                          n_keywords=0, n_subsections=10, repeats=.FALSE.)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "PROGRAM_RUN_INFO", &
-                                       description="Controls the printing of basic information generated by force_eval", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="PROGRAM_RUN_INFO", &
+                                       description="Controls the printing of basic information generated by FORCE_EVAL", &
                                        print_level=low_print_level, add_last=add_last_numeric, filename="__STD_OUT__")
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ENERGY_UNIT", &
+                          description="Specifies the physical unit used for the printing of the total energy. "// &
+                          "Note that the meaningfulness of the unit is not checked.", &
+                          usage="ENERGY_UNIT eV", &
+                          default_c_val="hartree", &
+                          repeats=.FALSE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "FORCES", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="FORCES", &
                                        description="Controls the printing of the forces after each force evaluation", &
                                        print_level=high_print_level, filename="__STD_OUT__")
       CALL keyword_create(keyword, __LOCATION__, &
@@ -316,41 +331,56 @@ CONTAINS
                           repeats=.FALSE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="FORCE_UNIT", &
+                          variants=["UNIT"], & ! add old keyword name for backward compatibility
+                          description="Specifies the physical unit used for the printing of the forces. "// &
+                          "Note that the meaningfulness of the unit is not checked.", &
+                          usage="FORCE_UNIT eV/angstrom", &
+                          default_c_val="hartree/bohr", &
+                          repeats=.FALSE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create( &
-         print_key, __LOCATION__, "GRID_INFORMATION", &
-         description="Controls the printing of information regarding the PW and RS grid structures.", &
-         print_level=medium_print_level, filename="__STD_OUT__")
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="GRID_INFORMATION", &
+                                      description="Controls the printing of information regarding the PW and RS grid structures.", &
+                                       print_level=medium_print_level, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "TOTAL_NUMBERS", &
-                                       description="Controls the printing of the total number of atoms, kinds,...", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="TOTAL_NUMBERS", &
+                                       description="Controls the printing of the total number of atoms, kinds, ...", &
                                        print_level=low_print_level, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "DISTRIBUTION", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="DISTRIBUTION", &
                                        description="Controls the printing of the distribution of molecules, atoms, ...", &
                                        print_level=high_print_level, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "DISTRIBUTION2D", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="DISTRIBUTION2D", &
                                        description="Controls the printing of the distribution of matrix blocks, ...", &
                                        print_level=high_print_level, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "DISTRIBUTION1D", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="DISTRIBUTION1D", &
                                        description="Each node prints out its distribution info ...", &
                                        print_level=high_print_level, filename="__STD_OUT__")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "STRESS_TENSOR", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="STRESS_TENSOR", &
                                        description="Controls the printing of the stress tensor", &
                                        print_level=high_print_level, filename="__STD_OUT__")
       CALL keyword_create(keyword, __LOCATION__, &
@@ -361,16 +391,27 @@ CONTAINS
                           lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="STRESS_UNIT", &
+                          description="Specifies the physical unit used for the printing of the stress tensor. "// &
+                          "Note that the meaningfulness of the unit is not checked.", &
+                          usage="STRESS_UNIT kbar", &
+                          default_c_val="bar", &
+                          repeats=.FALSE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "GRRM", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="GRRM", &
                                        description="Controls the printing of the GRRM interface file", &
                                        print_level=debug_print_level + 1, filename="CP2K_GRRM")
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
-      CALL cp_print_key_section_create(print_key, __LOCATION__, "SCINE", &
+      CALL cp_print_key_section_create(print_key, __LOCATION__, &
+                                       name="SCINE", &
                                        description="Controls the printing of the SCINE interface file", &
                                        print_level=debug_print_level + 1, filename="")
       CALL section_add_subsection(section, print_key)

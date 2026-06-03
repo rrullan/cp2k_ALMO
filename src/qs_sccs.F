@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -129,16 +129,15 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'sccs'
       REAL(KIND=dp), PARAMETER                           :: epstol = 1.0E-8_dp
 
-      CHARACTER(LEN=4*default_string_length)             :: message
-      CHARACTER(LEN=default_path_length)                 :: mpi_filename
-      CHARACTER(LEN=default_string_length)               :: cube_path, filename, my_pos_cube, &
+      CHARACTER(LEN=4*default_string_length)             :: message, my_pos_cube
+      CHARACTER(LEN=default_path_length)                 :: cube_path, filename, mpi_filename, &
                                                             print_path
       INTEGER                                            :: cube_unit, handle, i, ispin, iter, j, k, &
                                                             nspin, output_unit, print_level
       INTEGER(KIND=int_8)                                :: ngpts
       INTEGER, DIMENSION(3)                              :: lb, ub
       LOGICAL                                            :: append_cube, calculate_stress_tensor, &
-                                                            mpi_io, should_output
+                                                            do_kpoints, mpi_io, should_output
       REAL(KIND=dp) :: cavity_surface, cavity_volume, cell_volume, dphi2, dvol, e_tot, &
          epsilon_solvent, f, polarisation_charge, rho_delta, rho_delta_avg, rho_delta_max, &
          rho_iter_new, tot_rho_elec, tot_rho_solute
@@ -183,6 +182,7 @@ CONTAINS
       CALL get_qs_env(qs_env=qs_env, &
                       cp_subsys=cp_subsys, &
                       dft_control=dft_control, &
+                      do_kpoints=do_kpoints, &
                       energy=energy, &
                       input=input, &
                       para_env=para_env, &
@@ -194,6 +194,10 @@ CONTAINS
       sccs_control => dft_control%sccs_control
 
       CPASSERT(ASSOCIATED(qs_env))
+
+      IF (do_kpoints) THEN
+         CPWARN("SCCS with k-points has not yet been fully validated")
+      END IF
 
       IF (PRESENT(h_stress)) THEN
          calculate_stress_tensor = .TRUE.
@@ -991,7 +995,7 @@ CONTAINS
             border_points = 3
          END SELECT
          CALL init_input_type(input_settings, 2*border_points + 1, rs_grid_section, &
-                              1, (/-1, -1, -1/))
+                              1, [-1, -1, -1])
          CALL rs_grid_create_descriptor(rs_desc, f%pw_grid, input_settings, &
                                         border_points=border_points)
          ALLOCATE (rs_grid)

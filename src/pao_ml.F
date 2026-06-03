@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,7 +15,7 @@ MODULE pao_ml
    USE basis_set_types,                 ONLY: gto_basis_set_type
    USE cell_methods,                    ONLY: cell_create
    USE cell_types,                      ONLY: cell_type
-   USE dbcsr_api,                       ONLY: dbcsr_iterator_blocks_left,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_iterator_blocks_left,&
                                               dbcsr_iterator_next_block,&
                                               dbcsr_iterator_start,&
                                               dbcsr_iterator_stop,&
@@ -166,7 +166,7 @@ CONTAINS
          CALL pao_read_raw(filename, param, hmat, kinds, atom2kind, positions, xblocks, ml_range)
 
          ! check parametrization
-         IF (TRIM(param) .NE. TRIM(ADJUSTL(id2str(pao%parameterization)))) &
+         IF (TRIM(param) /= TRIM(ADJUSTL(id2str(pao%parameterization)))) &
             CPABORT("Restart PAO parametrization does not match")
 
          ! map read-in kinds onto kinds of this run
@@ -190,8 +190,9 @@ CONTAINS
       CALL para_env%bcast(positions)
       CALL para_env%bcast(ml_range)
 
-      IF (ml_range(1) /= 1 .OR. ml_range(2) /= natoms) &
+      IF (ml_range(1) /= 1 .OR. ml_range(2) /= natoms) THEN
          CPWARN("Skipping some atoms for PAO-ML training.")
+      END IF
 
       ! create cell from read-in h-matrix
       CALL cell_create(cell, hmat)
@@ -268,7 +269,7 @@ CONTAINS
          DO jkind = 1, SIZE(atomic_kind_set)
             CALL get_atomic_kind(atomic_kind_set(jkind), name=name)
             ! match kinds via their name
-            IF (TRIM(kinds(ikind)%name) .EQ. TRIM(name)) THEN
+            IF (TRIM(kinds(ikind)%name) == TRIM(name)) THEN
                CALL pao_kinds_ensure_equal(pao, qs_env, jkind, kinds(ikind))
                kindsmap(ikind) = jkind
                EXIT

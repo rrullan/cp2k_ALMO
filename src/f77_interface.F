@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -26,16 +26,19 @@ MODULE f77_interface
    USE cell_methods,                    ONLY: init_cell
    USE cell_types,                      ONLY: cell_type
    USE cp2k_info,                       ONLY: get_runtime_info
+   USE cp_dbcsr_api,                    ONLY: dbcsr_finalize_lib,&
+                                              dbcsr_init_lib
    USE cp_dlaf_utils_api,               ONLY: cp_dlaf_finalize,&
-                                              cp_dlaf_initialize
+                                              cp_dlaf_free_all_grids
    USE cp_error_handling,               ONLY: cp_error_handling_setup
    USE cp_files,                        ONLY: init_preconnection_list,&
                                               open_file
    USE cp_log_handling,                 ONLY: &
         cp_add_default_logger, cp_default_logger_stack_size, cp_failure_level, &
-        cp_get_default_logger, cp_logger_create, cp_logger_get_default_unit_nr, cp_logger_release, &
-        cp_logger_retain, cp_logger_type, cp_rm_default_logger, cp_to_string
+        cp_get_default_logger, cp_logger_create, cp_logger_release, cp_logger_retain, &
+        cp_logger_type, cp_rm_default_logger, cp_to_string
    USE cp_output_handling,              ONLY: cp_iterate
+   USE cp_output_handling_openpmd,      ONLY: cp_openpmd_output_finalize
    USE cp_result_methods,               ONLY: get_results,&
                                               test_for_result
    USE cp_result_types,                 ONLY: cp_result_type
@@ -43,8 +46,6 @@ MODULE f77_interface
                                               cp_subsys_set,&
                                               cp_subsys_type,&
                                               unpack_subsys_particles
-   USE dbcsr_api,                       ONLY: dbcsr_finalize_lib,&
-                                              dbcsr_init_lib
    USE dbm_api,                         ONLY: dbm_library_finalize,&
                                               dbm_library_init
    USE eip_environment,                 ONLY: eip_init
@@ -73,7 +74,7 @@ MODULE f77_interface
    USE grid_api,                        ONLY: grid_library_finalize,&
                                               grid_library_init
    USE input_constants,                 ONLY: &
-        do_eip, do_embed, do_fist, do_mixed, do_nnp, do_qmmm, do_qmmmx, do_qs, do_sirius
+        do_eip, do_embed, do_fist, do_ipi, do_mixed, do_nnp, do_qmmm, do_qmmmx, do_qs, do_sirius
    USE input_cp2k_check,                ONLY: check_cp2k_input
    USE input_cp2k_force_eval,           ONLY: create_force_eval_section
    USE input_cp2k_read,                 ONLY: empty_initial_variables,&
@@ -87,6 +88,8 @@ MODULE f77_interface
         section_vals_get, section_vals_get_subs_vals, section_vals_release, &
         section_vals_remove_values, section_vals_retain, section_vals_type, section_vals_val_get, &
         section_vals_write
+   USE ipi_environment,                 ONLY: ipi_init
+   USE ipi_environment_types,           ONLY: ipi_environment_type
    USE kinds,                           ONLY: default_path_length,&
                                               default_string_length,&
                                               dp
@@ -112,11 +115,12 @@ MODULE f77_interface
                                               rm_mp_perf_env
    USE nnp_environment,                 ONLY: nnp_init
    USE nnp_environment_types,           ONLY: nnp_type
-   USE offload_api,                     ONLY: offload_get_chosen_device,&
-                                              offload_get_device_count,&
+   USE offload_api,                     ONLY: offload_get_device_count,&
                                               offload_init,&
                                               offload_set_chosen_device
    USE periodic_table,                  ONLY: init_periodic_table
+   USE pw_fpga,                         ONLY: pw_fpga_finalize,&
+                                              pw_fpga_init
    USE pw_gpu,                          ONLY: pw_gpu_finalize,&
                                               pw_gpu_init
    USE pwdft_environment,               ONLY: pwdft_init
@@ -131,6 +135,9 @@ MODULE f77_interface
                                               qs_env_create,&
                                               qs_environment_type
    USE reference_manager,               ONLY: remove_all_references
+   USE sirius_interface,                ONLY: cp_sirius_finalize,&
+                                              cp_sirius_init,&
+                                              cp_sirius_is_initialized
    USE string_table,                    ONLY: string_table_allocate,&
                                               string_table_deallocate
    USE timings,                         ONLY: add_timer_env,&
@@ -141,6 +148,10 @@ MODULE f77_interface
                                               timings_register_hooks
    USE timings_types,                   ONLY: timer_env_type
    USE virial_types,                    ONLY: virial_type
+   USE xc_gauxc_interface,              ONLY: cp_gauxc_status_type,&
+                                              gauxc_check_status,&
+                                              gauxc_finalize,&
+                                              gauxc_init
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -207,13 +218,19 @@ CONTAINS
 !>      other functions when using cp2k as library
 !> \param init_mpi if the mpi environment should be initialized
 !> \param ierr returns a number different from 0 if there was an error
+!> \param mpi_comm an existing mpi communicator (if not given mp_comm_world
+!>      will be used)
 !> \author fawzi
 ! **************************************************************************************************
-   SUBROUTINE init_cp2k(init_mpi, ierr)
+   SUBROUTINE init_cp2k(init_mpi, ierr, mpi_comm)
       LOGICAL, INTENT(in)                                :: init_mpi
       INTEGER, INTENT(out)                               :: ierr
+      TYPE(mp_comm_type), INTENT(in), OPTIONAL           :: mpi_comm
 
       INTEGER                                            :: offload_device_count, unit_nr
+      INTEGER, POINTER                                   :: active_device_id
+      INTEGER, TARGET                                    :: offload_chosen_device
+      TYPE(cp_gauxc_status_type)                         :: gauxc_status
       TYPE(cp_logger_type), POINTER                      :: logger
 
       IF (.NOT. module_initialized) THEN
@@ -239,7 +256,11 @@ CONTAINS
             ! get the default system wide communicator
             CALL mp_world_init(default_para_env)
          ELSE
-            default_para_env = mp_comm_world
+            IF (PRESENT(mpi_comm)) THEN
+               default_para_env = mpi_comm
+            ELSE
+               default_para_env = mp_comm_world
+            END IF
          END IF
 
          CALL string_table_allocate()
@@ -263,39 +284,36 @@ CONTAINS
          module_initialized = .TRUE.
          ierr = 0
 
-         !   *** Initialize mathematical constants ***
+         ! Initialize mathematical constants
          CALL init_periodic_table()
 
-         !   *** init the bibliography ***
+         ! Init the bibliography
          CALL add_all_references()
 
+         NULLIFY (active_device_id)
          offload_device_count = offload_get_device_count()
 
          ! Select active offload device when available.
          IF (offload_device_count > 0) THEN
-            CALL offload_set_chosen_device(MOD(default_para_env%mepos, offload_device_count))
+            offload_chosen_device = MOD(default_para_env%mepos, offload_device_count)
+            CALL offload_set_chosen_device(offload_chosen_device)
+            active_device_id => offload_chosen_device
          END IF
 
          ! Initialize the DBCSR configuration
          ! Attach the time handler hooks to DBCSR
-#if defined __DBCSR_ACC
-         IF (offload_device_count > 0) THEN
-            CALL dbcsr_init_lib(default_para_env%get_handle(), timeset_hook, timestop_hook, &
-                                cp_abort_hook, cp_warn_hook, io_unit=unit_nr, &
-                                accdrv_active_device_id=offload_get_chosen_device())
-         ELSE
-            CALL dbcsr_init_lib(default_para_env%get_handle(), timeset_hook, timestop_hook, &
-                                cp_abort_hook, cp_warn_hook, io_unit=unit_nr)
-         END IF
-#else
          CALL dbcsr_init_lib(default_para_env%get_handle(), timeset_hook, timestop_hook, &
-                             cp_abort_hook, cp_warn_hook, io_unit=unit_nr)
+                             cp_abort_hook, cp_warn_hook, io_unit=unit_nr, &
+                             accdrv_active_device_id=active_device_id)
+#if defined(__parallel)
+         CALL gauxc_init(default_para_env%get_handle(), gauxc_status)
+#else
+         CALL gauxc_init(status=gauxc_status)
 #endif
+         CALL gauxc_check_status(gauxc_status)
+         CALL pw_fpga_init()
          CALL pw_gpu_init()
          CALL grid_library_init()
-
-         CALL cp_dlaf_initialize()
-
          CALL dbm_library_init()
       ELSE
          ierr = cp_failure_level
@@ -317,6 +335,7 @@ CONTAINS
       INTEGER, INTENT(out)                               :: ierr
 
       INTEGER                                            :: ienv
+      TYPE(cp_gauxc_status_type)                         :: gauxc_status
 
 !sample peak memory
 
@@ -331,27 +350,35 @@ CONTAINS
          END DO
          DEALLOCATE (f_envs)
 
+         ! Finalize libraries (Offload)
          CALL dbm_library_finalize()
-
          CALL grid_library_finalize()
-
-         ! Finalize the DBCSR configuration
-         CALL dbcsr_finalize_lib()
          CALL pw_gpu_finalize()
-         CALL mp_para_env_release(default_para_env)
-         ierr = 0
-         CALL cp_rm_default_logger()
+         CALL pw_fpga_finalize()
+         IF (cp_sirius_is_initialized()) CALL cp_sirius_finalize()
+         CALL gauxc_finalize(gauxc_status)
+         CALL gauxc_check_status(gauxc_status)
+         ! Finalize the DBCSR library
+         CALL dbcsr_finalize_lib()
 
+         ! Finalize DLA-Future and pika runtime; if already finalized does nothing
+         CALL cp_dlaf_free_all_grids()
          CALL cp_dlaf_finalize()
 
-         !   *** deallocate the bibliography ***
+         CALL mp_para_env_release(default_para_env)
+         CALL cp_rm_default_logger()
+
+         ! Deallocate the bibliography
          CALL remove_all_references()
          CALL rm_timer_env()
          CALL rm_mp_perf_env()
          CALL string_table_deallocate(0)
+         CALL cp_openpmd_output_finalize()
          IF (finalize_mpi) THEN
             CALL mp_world_finalize()
          END IF
+
+         ierr = 0
       END IF
    END SUBROUTINE finalize_cp2k
 
@@ -535,7 +562,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief creates a new force environment using the given input, and writing
-!>      the output to the given output unit
+!>        the output to the given output unit
 !> \param new_env_id will contain the id of the newly created environment
 !> \param input_declaration ...
 !> \param input_path where to read the input (if the input is given it can
@@ -544,7 +571,7 @@ CONTAINS
 !> \param mpi_comm the mpi communicator to be used for this environment
 !>        it will not be freed when you get rid of the force_env
 !> \param output_unit if given it should be the unit for the output
-!>        and no file is open(should be valid on the processor with rank 0)
+!>        and no file is open (should be valid on the processor with rank 0)
 !> \param owns_out_unit if the output unit should be closed upon destroing
 !>        of the force_env (defaults to true if not default_output_unit)
 !> \param input the parsed input, if given and valid it is used
@@ -568,7 +595,7 @@ CONTAINS
       CHARACTER(len=*), INTENT(in)                       :: input_path
       CHARACTER(len=*), INTENT(in), OPTIONAL             :: output_path
 
-      CLASS(mp_comm_type), INTENT(IN), OPTIONAL           :: mpi_comm
+      CLASS(mp_comm_type), INTENT(IN), OPTIONAL          :: mpi_comm
       INTEGER, INTENT(in), OPTIONAL                      :: output_unit
       LOGICAL, INTENT(in), OPTIONAL                      :: owns_out_unit
       TYPE(section_vals_type), OPTIONAL, POINTER         :: input
@@ -583,7 +610,7 @@ CONTAINS
                  nforce_eval, ngroups, nsubforce_size, unit_nr
       INTEGER, DIMENSION(:), POINTER                     :: group_distribution, i_force_eval, &
                                                             lgroup_distribution
-      LOGICAL :: check, do_qmmm_force_mixing, multiple_subsys, my_echo, my_owns_out_unit, &
+      LOGICAL :: check, do_qmmm_force_mixing, multiple_subsys, my_owns_out_unit, &
                  use_motion_section, use_multiple_para_env
       TYPE(cp_logger_type), POINTER                      :: logger, my_logger
       TYPE(mp_para_env_type), POINTER                    :: my_para_env, para_env
@@ -594,6 +621,7 @@ CONTAINS
       TYPE(force_env_type), POINTER                      :: force_env, my_force_env
       TYPE(fp_type), POINTER                             :: fp_env
       TYPE(global_environment_type), POINTER             :: globenv
+      TYPE(ipi_environment_type), POINTER                :: ipi_env
       TYPE(keyword_type), POINTER                        :: keyword
       TYPE(meta_env_type), POINTER                       :: meta_env
       TYPE(mixed_environment_type), POINTER              :: mixed_env
@@ -643,14 +671,17 @@ CONTAINS
             IF (output_path == "__STD_OUT__") THEN
                unit_nr = default_output_unit
             ELSE
-               CALL open_file(file_name=output_path, file_status="UNKNOWN", &
-                              file_action="WRITE", file_position="APPEND", &
+               CALL open_file(file_name=output_path, &
+                              file_status="UNKNOWN", &
+                              file_action="WRITE", &
+                              file_position="APPEND", &
                               unit_number=unit_nr)
             END IF
          ELSE
             unit_nr = -1
          END IF
       END IF
+
       my_owns_out_unit = unit_nr /= default_output_unit
       IF (PRESENT(owns_out_unit)) my_owns_out_unit = owns_out_unit
       CALL globenv_create(globenv)
@@ -671,21 +702,9 @@ CONTAINS
       ELSE
          CALL section_vals_retain(input_file)
       END IF
-      CALL section_vals_val_get(input_file, "GLOBAL%ECHO_INPUT", &
-                                l_val=my_echo)
-      ! echo after check?
-      IF (para_env%is_source() .AND. my_echo) THEN
-         CALL section_vals_write(input_file, unit_nr=cp_logger_get_default_unit_nr(logger), &
-                                 hide_root=.TRUE., hide_defaults=.FALSE.)
-      END IF
-      ! XXXXXXXXXXXXXXXXXXXXXXXXXXX
-      ! root_section => input_file
-      ! XXXXXXXXXXXXXXXXXXXXXXXXXXX
 
       CALL check_cp2k_input(input_declaration, input_file, para_env=para_env, output_unit=unit_nr)
-      ! XXXXXXXXXXXXXXXXXXXXXXXXXXX
-      ! NULLIFY(input_file)
-      ! XXXXXXXXXXXXXXXXXXXXXXXXXXX
+
       root_section => input_file
       CALL section_vals_retain(root_section)
 
@@ -742,7 +761,7 @@ CONTAINS
                              "the one omitted from that order list) must be a MIXED_ENV type calculation. Please check your "// &
                              "input file and possibly correct the MULTIPLE_FORCE_EVAL%FORCE_EVAL_ORDER. ")
 
-            IF (method_name_id .EQ. do_mixed) THEN
+            IF (method_name_id == do_mixed) THEN
                check = ASSOCIATED(force_env%mixed_env%sub_para_env)
                CPASSERT(check)
                ngroups = force_env%mixed_env%ngroups
@@ -755,7 +774,7 @@ CONTAINS
                CALL cp_rm_default_logger()
                CALL cp_add_default_logger(my_logger)
             END IF
-            IF (method_name_id .EQ. do_embed) THEN
+            IF (method_name_id == do_embed) THEN
                check = ASSOCIATED(force_env%embed_env%sub_para_env)
                CPASSERT(check)
                ngroups = force_env%embed_env%ngroups
@@ -830,6 +849,10 @@ CONTAINS
                                   globenv=globenv, force_env_section=force_env_section)
 
          CASE (do_sirius)
+            IF (.NOT. cp_sirius_is_initialized()) THEN
+               IF (unit_nr > 0) WRITE (UNIT=unit_nr, FMT="(T2,A)", ADVANCE="NO") "SIRIUS| "
+               CALL cp_sirius_init()
+            END IF
             ALLOCATE (pwdft_env)
             CALL pwdft_env_create(pwdft_env)
             CALL pwdft_init(pwdft_env, root_section, my_para_env, force_env_section=force_env_section, &
@@ -868,7 +891,14 @@ CONTAINS
             CALL force_env_create(my_force_env, root_section, nnp_env=nnp_env, para_env=my_para_env, &
                                   globenv=globenv, force_env_section=force_env_section)
 
-         CASE default
+         CASE (do_ipi)
+            ALLOCATE (ipi_env)
+            CALL ipi_init(ipi_env, root_section, my_para_env, force_env_section=force_env_section, &
+                          subsys_section=subsys_section)
+            CALL force_env_create(my_force_env, root_section, ipi_env=ipi_env, para_env=my_para_env, &
+                                  globenv=globenv, force_env_section=force_env_section)
+
+         CASE DEFAULT
             CALL create_force_eval_section(section)
             keyword => section_get_keyword(section, "METHOD")
             CALL keyword_get(keyword, enum=enum)
@@ -1493,9 +1523,10 @@ CONTAINS
       input_file => read_input(input_declaration, input_file_path, initial_variables=initial_variables, &
                                para_env=para_env)
       CALL check_cp2k_input(input_declaration, input_file, para_env=para_env, output_unit=unit_nr)
-      IF (my_echo_input .AND. para_env%is_source()) THEN
+      IF (my_echo_input .AND. (unit_nr > 0)) THEN
          CALL section_vals_write(input_file, &
-                                 unit_nr=cp_logger_get_default_unit_nr(logger, local=.FALSE.), hide_root=.TRUE., &
+                                 unit_nr=unit_nr, &
+                                 hide_root=.TRUE., &
                                  hide_defaults=.FALSE.)
       END IF
       CALL section_vals_release(input_file)
@@ -1504,6 +1535,7 @@ CONTAINS
       CALL mp_para_env_release(para_env)
       ierr = 0
       CALL cp_rm_default_logger()
+
    END SUBROUTINE check_input
 
 END MODULE f77_interface

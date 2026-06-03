@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -381,8 +381,7 @@ CONTAINS
             IF (cp_sll_3d_r_get_length(pw_pool%r3d_array) < pw_pool%max_cache) THEN
                CALL cp_sll_3d_r_insert_el(pw_pool%r3d_array, el=cr3d)
             ELSE
-               IF (max_max_cache >= 0) &
-                  CPWARN("hit max_cache")
+               CPWARN_IF(max_max_cache >= 0, "hit max_cache")
                DEALLOCATE (cr3d)
             END IF
          ELSE

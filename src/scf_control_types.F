@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,13 +22,14 @@ MODULE scf_control_types
                                               cp_print_key_unit_nr
    USE cp_units,                        ONLY: cp_unit_from_cp2k
    USE input_constants,                 ONLY: &
-        atomic_guess, diag_ot, direct_p_mix, general_roks, high_spin_roks, ot_algo_taylor_or_diag, &
-        outer_scf_basis_center_opt, outer_scf_cdft_constraint, outer_scf_ddapc_constraint, &
-        outer_scf_none, outer_scf_optimizer_bisect, outer_scf_optimizer_broyden, &
-        outer_scf_optimizer_diis, outer_scf_optimizer_newton, outer_scf_optimizer_newton_ls, &
-        outer_scf_optimizer_none, outer_scf_optimizer_sd, outer_scf_optimizer_secant, &
-        outer_scf_s2_constraint, smear_energy_window, smear_fermi_dirac, smear_list
-   USE input_cp2k_dft,                  ONLY: create_scf_section
+        atomic_guess, diag_ot, direct_p_mix, general_roks, high_spin_roks, no_guess, no_mix, &
+        ot_algo_taylor_or_diag, outer_scf_basis_center_opt, outer_scf_cdft_constraint, &
+        outer_scf_ddapc_constraint, outer_scf_none, outer_scf_optimizer_bisect, &
+        outer_scf_optimizer_broyden, outer_scf_optimizer_diis, outer_scf_optimizer_newton, &
+        outer_scf_optimizer_newton_ls, outer_scf_optimizer_none, outer_scf_optimizer_sd, &
+        outer_scf_optimizer_secant, outer_scf_s2_constraint, smear_energy_window, &
+        smear_fermi_dirac, smear_gaussian, smear_list, smear_mp, smear_mv
+   USE input_cp2k_scf,                  ONLY: create_scf_section
    USE input_enumeration_types,         ONLY: enum_i2c,&
                                               enumeration_type
    USE input_keyword_types,             ONLY: keyword_get,&
@@ -59,7 +60,8 @@ MODULE scf_control_types
    ! Public data types
 
    PUBLIC :: scf_control_type, &
-             smear_type
+             smear_type, &
+             gce_type
 
    ! Public subroutines
 
@@ -88,56 +90,70 @@ MODULE scf_control_types
 !> \author Fawzi Mohamed
 ! **************************************************************************************************
    TYPE smear_type
-      LOGICAL       :: do_smear
-      LOGICAL       :: common_mu
-      INTEGER       :: method
-      REAL(KIND=dp) :: electronic_temperature, &
-                       fixed_mag_mom, &
-                       eps_fermi_dirac, &
-                       window_size
-      REAL(KIND=dp), DIMENSION(:), POINTER :: list
+      LOGICAL                               :: do_smear = .FALSE.
+      LOGICAL                               :: common_mu = .FALSE.
+      INTEGER                               :: method = -1
+      REAL(KIND=dp)                         :: electronic_temperature = -1.0_dp, &
+                                               fixed_mag_mom = -1.0_dp, &
+                                               eps_fermi_dirac = -1.0_dp, &
+                                               window_size = -1.0_dp, &
+                                               smearing_width = -1.0_dp
+      REAL(KIND=dp), DIMENSION(:), POINTER  :: list => NULL()
    END TYPE smear_type
 
    TYPE diagonalization_type
-      INTEGER       :: method
-      REAL(KIND=dp) :: eps_jacobi
-      REAL(KIND=dp) :: jacobi_threshold
-      INTEGER       :: max_iter, nkrylov, nblock_krylov
+      INTEGER                               :: method = -1
+      REAL(KIND=dp)                         :: eps_jacobi = -1.0_dp
+      REAL(KIND=dp)                         :: jacobi_threshold = -1.0_dp
+      INTEGER                               :: max_iter = -1, nkrylov = -1, nblock_krylov = -1
       ! Maximum Overlap Method
-      LOGICAL       :: mom, mom_didguess
-      INTEGER       :: mom_proj_formula
+      LOGICAL                               :: mom = .FALSE., mom_didguess = .FALSE.
+      INTEGER                               :: mom_proj_formula = -1
       ! indices of de-occupied and newly occupied alpha / beta molecular orbitals
-      INTEGER, DIMENSION(:), POINTER :: mom_deoccA, mom_deoccB, mom_occA, mom_occB
+      INTEGER, DIMENSION(:), POINTER        :: mom_deoccA => NULL(), mom_deoccB => NULL(), &
+                                               mom_occA => NULL(), mom_occB => NULL()
       ! determines on SCF which iteration MOM will be switched on;
       ! since MOs from the previous iteration should be available, it might be at least
       !  1 when wave-function has been read from restart file, or
       !  2 when the atomic guess method has been used
-      INTEGER       :: mom_start
-      INTEGER       :: mom_type
-      REAL(KIND=dp) :: eps_iter
-      REAL(KIND=dp) :: eps_adapt
-      TYPE(qs_ot_settings_type) :: ot_settings
+      INTEGER                               :: mom_start = -1
+      INTEGER                               :: mom_type = -1
+      REAL(KIND=dp)                         :: eps_iter = -1.0_dp
+      REAL(KIND=dp)                         :: eps_adapt = -1.0_dp
+      TYPE(qs_ot_settings_type)             :: ot_settings = qs_ot_settings_type()
    END TYPE diagonalization_type
 
    TYPE scf_control_type
-      TYPE(outer_scf_control_type)          :: outer_scf
-      TYPE(smear_type), POINTER             :: smear
-      TYPE(diagonalization_type)            :: diagonalization
-      INTEGER                               :: density_guess, mixing_method
-      REAL(KIND=dp)                         :: eps_eigval, eps_scf, eps_scf_hist, &
-                                               level_shift, &
-                                               eps_lumos, eps_diis
-      INTEGER                               :: max_iter_lumos, max_diis, nmixing
-      INTEGER                               :: max_scf, max_scf_hist, &
-                                               maxl, nkind
-      LOGICAL                               :: do_diag_sub, &
-                                               use_cholesky, use_ot, use_diag, do_outer_scf_reortho, &
-                                               ignore_convergence_failure
-      INTEGER, DIMENSION(2)                 :: added_mos
-      INTEGER                               :: roks_scheme
-      REAL(KIND=dp)                         :: roks_f
-      REAL(KIND=dp), DIMENSION(0:2, 0:2, 1:2) :: roks_parameter
+      TYPE(outer_scf_control_type)          :: outer_scf = outer_scf_control_type()
+      TYPE(smear_type), POINTER             :: smear => NULL()
+      TYPE(diagonalization_type)            :: diagonalization = diagonalization_type()
+      TYPE(gce_type), POINTER               :: gce => NULL()
+      INTEGER                               :: density_guess = -1, mixing_method = -1
+      REAL(KIND=dp)                         :: eps_eigval = -1.0_dp, eps_scf = -1.0_dp, eps_scf_hist = -1.0_dp, &
+                                               level_shift = -1.0_dp, &
+                                               eps_lumos = -1.0_dp, eps_diis = -1.0_dp
+      INTEGER                               :: max_iter_lumos = -1, max_diis = -1, nmixing = -1
+      INTEGER                               :: max_scf = -1, max_scf_hist = -1, &
+                                               maxl = -1, nkind = -1
+      LOGICAL                               :: do_diag_sub = .FALSE., &
+                                               use_cholesky = .FALSE., use_ot = .FALSE., &
+                                               use_diag = .FALSE., do_outer_scf_reortho = .FALSE., &
+                                               ignore_convergence_failure = .FALSE.
+      LOGICAL                               :: force_scf_calculation = .FALSE.
+      LOGICAL                               :: non_selfconsistent = .FALSE.
+      INTEGER, DIMENSION(2)                 :: added_mos = -1
+      INTEGER                               :: roks_scheme = -1
+      REAL(KIND=dp)                         :: roks_f = -1.0_dp
+      REAL(KIND=dp), DIMENSION(0:2, 0:2, 1:2) :: roks_parameter = -1.0_dp
    END TYPE scf_control_type
+
+   TYPE gce_type
+      LOGICAL                               :: do_gce = .FALSE.
+      REAL(KIND=dp)                         :: target_workfunction = 0.16_dp, &
+                                               ref_esp = 0.0_dp, &
+                                               mixing_coef = 0.3_dp, &
+                                               prev_workfunction = -1001.0_dp
+   END TYPE gce_type
 
 CONTAINS
 
@@ -151,7 +167,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE scf_c_create(scf_control)
 
-      TYPE(scf_control_type), INTENT(OUT)                :: scf_control
+      TYPE(scf_control_type), INTENT(INOUT)              :: scf_control
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'scf_c_create'
 
@@ -161,7 +177,11 @@ CONTAINS
 
       ! Load the default values
 
-      scf_control%density_guess = atomic_guess
+      IF (scf_control%non_selfconsistent) THEN
+         scf_control%density_guess = no_guess
+      ELSE
+         scf_control%density_guess = atomic_guess
+      END IF
       scf_control%eps_eigval = 1.0E-5_dp
       scf_control%eps_scf = 1.0E-5_dp
       scf_control%eps_scf_hist = 0.0_dp
@@ -177,6 +197,7 @@ CONTAINS
       scf_control%do_diag_sub = .FALSE.
       scf_control%use_ot = .FALSE.
       scf_control%ignore_convergence_failure = .FALSE.
+      scf_control%force_scf_calculation = .FALSE.
       scf_control%do_outer_scf_reortho = .TRUE.
       scf_control%max_diis = 4
       scf_control%eps_diis = 0.1_dp
@@ -184,7 +205,11 @@ CONTAINS
       scf_control%max_scf_hist = 0
 
       !Mixing
-      scf_control%mixing_method = direct_p_mix
+      IF (scf_control%non_selfconsistent) THEN
+         scf_control%mixing_method = no_mix
+      ELSE
+         scf_control%mixing_method = direct_p_mix
+      END IF
 
       ! Diagonalization
       scf_control%diagonalization%method = 0
@@ -279,6 +304,10 @@ CONTAINS
       IF (ASSOCIATED(scf_control%outer_scf%cdft_opt_control)) &
          CALL cdft_opt_type_release(scf_control%outer_scf%cdft_opt_control)
 
+      IF (ASSOCIATED(scf_control%gce)) THEN
+         DEALLOCATE (scf_control%gce)
+      END IF
+
       ! Maximum overlap method orbital indices lists
       ! mom_deoccA, mom_deoccB, mom_occA, mom_occB
       ! points to memory allocated by input file parser,
@@ -304,10 +333,11 @@ CONTAINS
 
       INTEGER                                            :: cholesky_flag, handle, ialgo
       INTEGER, DIMENSION(:), POINTER                     :: added_mos
-      LOGICAL                                            :: do_mixing
+      LOGICAL                                            :: do_mixing, explicit
       REAL(KIND=dp), DIMENSION(:), POINTER               :: roks_parameter
-      TYPE(section_vals_type), POINTER                   :: mixing_section, outer_scf_section, &
-                                                            scf_section, smear_section
+      TYPE(section_vals_type), POINTER                   :: gce_section, mixing_section, &
+                                                            outer_scf_section, scf_section, &
+                                                            smear_section
 
       CALL timeset(routineN, handle)
 
@@ -327,15 +357,25 @@ CONTAINS
          scf_control%use_diag = .TRUE.
       END IF
       CALL section_vals_val_get(scf_section, "OT%ALGORITHM", i_val=ialgo)
-      scf_control%do_outer_scf_reortho = ialgo .EQ. ot_algo_taylor_or_diag
+      scf_control%do_outer_scf_reortho = ialgo == ot_algo_taylor_or_diag
       CALL section_vals_val_get(scf_section, "SCF_GUESS", i_val=scf_control%density_guess)
-      CALL section_vals_val_get(scf_section, "EPS_DIIS", r_val=scf_control%eps_diis)
       CALL section_vals_val_get(scf_section, "eps_eigval", r_val=scf_control%eps_eigval)
       CALL section_vals_val_get(scf_section, "cholesky", i_val=cholesky_flag)
+      IF (scf_control%use_ot) THEN
+         ! eps_diis default is 0 for OT
+         scf_control%eps_diis = 0.0_dp
+         CALL section_vals_val_get(scf_section, "EPS_DIIS", explicit=explicit)
+         IF (explicit) THEN
+            CALL section_vals_val_get(scf_section, "EPS_DIIS", r_val=scf_control%eps_diis)
+         END IF
+      ELSE
+         CALL section_vals_val_get(scf_section, "EPS_DIIS", r_val=scf_control%eps_diis)
+      END IF
       IF (cholesky_flag > 0) THEN
          scf_control%use_cholesky = .TRUE.
       END IF
       CALL section_vals_val_get(scf_section, "IGNORE_CONVERGENCE_FAILURE", l_val=scf_control%ignore_convergence_failure)
+      CALL section_vals_val_get(scf_section, "FORCE_SCF_CALCULATION", l_val=scf_control%force_scf_calculation)
       CALL section_vals_val_get(scf_section, "eps_scf", r_val=scf_control%eps_scf)
       CALL section_vals_val_get(scf_section, "level_shift", r_val=scf_control%level_shift)
       CALL section_vals_val_get(scf_section, "max_diis", i_val=scf_control%max_diis)
@@ -449,6 +489,10 @@ CONTAINS
          CALL section_vals_val_get(mixing_section, "NMIXING", i_val=scf_control%nmixing)
       END IF ! do mixing
 
+      gce_section => section_vals_get_subs_vals(scf_section, "GCE")
+      CALL init_gce(scf_control%gce)
+      CALL read_gce_section(scf_control%gce, gce_section)
+
       CALL timestop(handle)
 
    END SUBROUTINE scf_c_read_parameters
@@ -468,6 +512,7 @@ CONTAINS
       smear%eps_fermi_dirac = 1.0E-5_dp
       smear%fixed_mag_mom = -100.0_dp
       smear%window_size = 0.0_dp
+      smear%smearing_width = 0.0_dp
       NULLIFY (smear%list)
    END SUBROUTINE init_smear
 
@@ -495,6 +540,12 @@ CONTAINS
                                    r_val=smear%eps_fermi_dirac)
          CALL section_vals_val_get(smear_section, "WINDOW_SIZE", &
                                    r_val=smear%window_size)
+         IF (smear%method == smear_gaussian .OR. &
+             smear%method == smear_mp .OR. &
+             smear%method == smear_mv) THEN
+            CALL section_vals_val_get(smear_section, "SIGMA", &
+                                      r_val=smear%smearing_width)
+         END IF
          IF (smear%method == smear_list) THEN
             CALL section_vals_val_get(smear_section, "LIST", &
                                       r_vals=r_vals)
@@ -506,6 +557,41 @@ CONTAINS
                                    r_val=smear%fixed_mag_mom)
       END IF ! do smear
    END SUBROUTINE read_smear_section
+
+! **************************************************************************************************
+!> \brief ...
+!> \param gce ...
+! **************************************************************************************************
+   SUBROUTINE init_gce(gce)
+      TYPE(gce_type), POINTER                            :: gce
+
+      CPASSERT(.NOT. ASSOCIATED(gce))
+      ALLOCATE (gce)
+      gce%do_gce = .FALSE.
+      gce%target_workfunction = 0.16_dp
+      gce%prev_workfunction = -1001.0_dp
+      gce%ref_esp = 0.0_dp
+      gce%mixing_coef = 0.3_dp
+   END SUBROUTINE init_gce
+
+! **************************************************************************************************
+!> \brief ...
+!> \param gce ...
+!> \param gce_section ...
+! **************************************************************************************************
+   SUBROUTINE read_gce_section(gce, gce_section)
+      TYPE(gce_type), POINTER                            :: gce
+      TYPE(section_vals_type), POINTER                   :: gce_section
+
+      CALL section_vals_val_get(gce_section, "_SECTION_PARAMETERS_", &
+                                l_val=gce%do_gce)
+      IF (gce%do_gce) THEN
+         CALL section_vals_val_get(gce_section, "TARGET_WORKFUNCTION", &
+                                   r_val=gce%target_workfunction)
+         CALL section_vals_val_get(gce_section, "MIXING_COEF", &
+                                   r_val=gce%mixing_coef)
+      END IF ! do gce
+   END SUBROUTINE read_gce_section
 
 ! **************************************************************************************************
 !> \brief writes out the scf parameters
@@ -553,20 +639,23 @@ CONTAINS
             keyword => section_get_keyword(section, "SCF_GUESS")
             CALL keyword_get(keyword, enum=enum)
 
-            WRITE (UNIT=output_unit, &
-                   FMT="(/,/,T2,A,T25,A,T51,A30,/,T25,56('-'),3(/,T25,A,T76,I5),/, "// &
-                   "T25,56('-'),4(/,T25,A,T72,ES9.2),/,T25,56('-'), "// &
-                   "1(/,T25,A,T71,F10.6))") &
-               "SCF PARAMETERS", &
-               "Density guess:     ", ADJUSTR(TRIM(enum_i2c(enum, scf_control%density_guess))), &
-               "max_scf:           ", scf_control%max_scf, &
-               "max_scf_history:   ", scf_control%max_scf_hist, &
-               "max_diis:          ", scf_control%max_diis, &
-               "eps_scf:           ", scf_control%eps_scf, &
-               "eps_scf_history:   ", scf_control%eps_scf_hist, &
-               "eps_diis:          ", scf_control%eps_diis, &
-               "eps_eigval:        ", scf_control%eps_eigval, &
-               "level_shift [a.u.]:", scf_control%level_shift
+            IF (.NOT. scf_control%non_selfconsistent .OR. scf_control%force_scf_calculation) THEN
+               WRITE (UNIT=output_unit, &
+                      FMT="(/,/,T2,A,T25,A,T51,A30,/,T25,56('-'),3(/,T25,A,T76,I5),/, "// &
+                      "T25,56('-'),4(/,T25,A,T72,ES9.2),/,T25,56('-'), "// &
+                      "1(/,T25,A,T71,F10.6))") &
+                  "SCF PARAMETERS", &
+                  "Density guess:     ", ADJUSTR(TRIM(enum_i2c(enum, scf_control%density_guess))), &
+                  "max_scf:           ", scf_control%max_scf, &
+                  "max_scf_history:   ", scf_control%max_scf_hist, &
+                  "max_diis:          ", scf_control%max_diis, &
+                  "eps_scf:           ", scf_control%eps_scf, &
+                  "eps_scf_history:   ", scf_control%eps_scf_hist, &
+                  "eps_diis:          ", scf_control%eps_diis, &
+                  "eps_eigval:        ", scf_control%eps_eigval, &
+                  "level_shift [a.u.]:", scf_control%level_shift
+            END IF
+
             IF (SUM(ABS(scf_control%added_mos)) > 0) THEN
                WRITE (UNIT=output_unit, FMT="(T25,A,T71,2I5)") &
                   "added MOs          ", scf_control%added_mos
@@ -577,7 +666,8 @@ CONTAINS
                WRITE (UNIT=output_unit, FMT="(T25,A)") "MOM enabled"
             END IF
 
-            IF (scf_control%mixing_method > 0 .AND. .NOT. scf_control%use_ot) THEN
+            IF (scf_control%mixing_method > 0 .AND. .NOT. scf_control%use_ot .AND. &
+                .NOT. scf_control%non_selfconsistent) THEN
                keyword => section_get_keyword(section, "MIXING%METHOD")
                CALL keyword_get(keyword, enum=enum)
                WRITE (UNIT=output_unit, FMT="(T25,A,/,T25,A,T51,A30)") &
@@ -602,13 +692,27 @@ CONTAINS
                   WRITE (UNIT=output_unit, FMT="(T25,A,T71,ES10.2)") &
                      "Electronic temperature [a.u.]:", scf_control%smear%electronic_temperature, &
                      "Accuracy threshold:", scf_control%smear%eps_fermi_dirac
-                  IF (scf_control%smear%fixed_mag_mom > 0.0_dp) WRITE (UNIT=output_unit, FMT="(T25,A,F10.5)") &
-                     "Spin channel alpha and spin channel beta are smeared independently, keeping"// &
-                     " fixed difference in number of electrons equal to ", scf_control%smear%fixed_mag_mom
+                  IF (scf_control%smear%fixed_mag_mom > 0.0_dp) WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.1)") &
+                     "Fixed magnetic moment set to:", scf_control%smear%fixed_mag_mom
+               CASE (smear_gaussian, smear_mp, smear_mv)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T71,ES10.2)") &
+                     "Smearing width (sigma) [a.u.]:", scf_control%smear%smearing_width, &
+                     "Accuracy threshold:", scf_control%smear%eps_fermi_dirac
+                  IF (scf_control%smear%fixed_mag_mom > 0.0_dp) &
+                     WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.1)") &
+                     "Fixed magnetic moment set to:", scf_control%smear%fixed_mag_mom
                CASE (smear_energy_window)
                   WRITE (UNIT=output_unit, FMT="(T25,A,T71,F10.6)") &
                      "Smear window [a.u.]:       ", scf_control%smear%window_size
                END SELECT
+            END IF
+
+            IF (scf_control%gce%do_gce) THEN
+               WRITE (UNIT=output_unit, FMT="(T25,A,/,T25,A,T61,F20.1)") &
+                  REPEAT("-", 56), &
+                  "Target workfunction [eV]:", scf_control%gce%target_workfunction
+               WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.1)") "Mixing coefficient:", scf_control%gce%mixing_coef
+               WRITE (UNIT=output_unit, FMT="(T25,A)") "Grand canonical SCF is activated."
             END IF
 
             CALL section_vals_val_get(dft_section, "ROKS", l_val=roks)

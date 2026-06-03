@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -101,8 +101,8 @@ CONTAINS
       logger => cp_get_default_logger()
       iounit = cp_logger_get_default_io_unit(logger)
 
-      my_rank = v_ee%pw_grid%para%my_pos
-      num_pe = v_ee%pw_grid%para%group_size
+      my_rank = v_ee%pw_grid%para%group%mepos
+      num_pe = v_ee%pw_grid%para%group%num_pe
       gid = v_ee%pw_grid%para%group
       tag = 1
 

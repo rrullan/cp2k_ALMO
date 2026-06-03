@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -11,9 +11,9 @@
 ! **************************************************************************************************
 MODULE et_coupling_types
 
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE kinds,                           ONLY: dp
 #include "./base/base_uses.f90"
 
@@ -44,7 +44,7 @@ MODULE et_coupling_types
       LOGICAL                                            :: first_run = .FALSE.
       LOGICAL                                            :: keep_matrix = .FALSE.
       REAL(KIND=dp)                                    :: energy = 0.0_dp, e1 = 0.0_dp, order_p = 0.0_dp
-   END TYPE
+   END TYPE et_coupling_type
 
 CONTAINS
 

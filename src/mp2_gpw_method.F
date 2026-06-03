@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,6 +15,10 @@ MODULE mp2_gpw_method
    USE cell_types,                      ONLY: cell_type
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_create, dbcsr_get_info, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
+        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, &
+        dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               cp_dbcsr_m_by_n_from_template
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -24,10 +28,6 @@ MODULE mp2_gpw_method
                                               cp_fm_get_info,&
                                               cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_create, dbcsr_get_info, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
-        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, &
-        dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
    USE group_dist_types,                ONLY: create_group_dist,&
                                               get_group_dist,&
                                               group_dist_d1_type,&
@@ -49,7 +49,7 @@ MODULE mp2_gpw_method
    USE pw_pool_types,                   ONLY: pw_pool_type
    USE pw_types,                        ONLY: pw_c1d_gs_type,&
                                               pw_r3d_rs_type
-   USE qs_collocate_density,            ONLY: calculate_wavefunction
+   USE qs_collocate_density,            ONLY: collocate_function
    USE qs_environment_types,            ONLY: qs_environment_type
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
    USE qs_kind_types,                   ONLY: qs_kind_type
@@ -80,7 +80,6 @@ CONTAINS
 !> \param particle_set ...
 !> \param atomic_kind_set ...
 !> \param qs_kind_set ...
-!> \param mo_coeff ...
 !> \param Eigenval ...
 !> \param nmo ...
 !> \param homo ...
@@ -96,7 +95,7 @@ CONTAINS
 !> \param Emp2_AB ...
 ! **************************************************************************************************
    SUBROUTINE mp2_gpw_compute(Emp2, Emp2_Cou, Emp2_EX, qs_env, para_env, para_env_sub, color_sub, &
-                              cell, particle_set, atomic_kind_set, qs_kind_set, mo_coeff, Eigenval, nmo, homo, &
+                              cell, particle_set, atomic_kind_set, qs_kind_set, Eigenval, nmo, homo, &
                               mat_munu, sab_orb_sub, mo_coeff_o, mo_coeff_v, eps_filter, unit_nr, &
                               mp2_memory, calc_ex, blacs_env_sub, Emp2_AB)
 
@@ -108,7 +107,6 @@ CONTAINS
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
-      TYPE(cp_fm_type), INTENT(IN)                       :: mo_coeff
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN)         :: Eigenval
       INTEGER, INTENT(IN)                                :: nmo
       INTEGER, DIMENSION(:), INTENT(IN)                  :: homo
@@ -125,7 +123,7 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'mp2_gpw_compute'
 
-      INTEGER :: a, a_group_counter, b, b_global, b_group_counter, blk, col, col_offset, col_size, &
+      INTEGER :: a, a_group_counter, b, b_global, b_group_counter, col, col_offset, col_size, &
          color_counter, EX_end, EX_end_send, EX_start, EX_start_send, group_counter, handle, &
          handle2, handle3, i, i_counter, i_group_counter, index_proc_shift, ispin, j, max_b_size, &
          max_batch_size_A, max_batch_size_I, max_row_col_local, my_A_batch_size, my_A_virtual_end, &
@@ -230,7 +228,7 @@ CONTAINS
       mem_min = HUGE(0)
       DO p = 1, ngroup
          q = ngroup/p
-         IF (p*q .NE. ngroup) CYCLE
+         IF (p*q /= ngroup) CYCLE
 
          CALL estimate_memory_usage(wfn_size, p, q, para_env_sub%num_pe, nmo, virtual(1), homo(1), calc_ex, mem_try)
 
@@ -255,7 +253,7 @@ CONTAINS
       wfn_calc_best = HUGE(wfn_calc_best)
       DO p = 1, ngroup
          q = ngroup/p
-         IF (p*q .NE. ngroup) CYCLE
+         IF (p*q /= ngroup) CYCLE
 
          CALL estimate_memory_usage(wfn_size, p, q, para_env_sub%num_pe, nmo, virtual(1), homo(1), calc_ex, mem_try)
 
@@ -361,9 +359,9 @@ CONTAINS
       ALLOCATE (psi_i(my_I_occupied_start:my_I_occupied_end))
       DO i = my_I_occupied_start, my_I_occupied_end
          CALL auxbas_pw_pool%create_pw(psi_i(i))
-         CALL calculate_wavefunction(mo_coeff, i, psi_i(i), rho_g, atomic_kind_set, &
-                                     qs_kind_set, cell, dft_control, particle_set, &
-                                     pw_env_sub, external_vector=my_Cocc(:, i - my_I_occupied_start + 1))
+         CALL collocate_function(my_Cocc(:, i - my_I_occupied_start + 1), &
+                                 psi_i(i), rho_g, atomic_kind_set, qs_kind_set, cell, particle_set, &
+                                 pw_env_sub, dft_control%qs_control%eps_rho_rspace)
       END DO
 
       Emp2 = 0.0_dp
@@ -380,9 +378,9 @@ CONTAINS
          IF (calc_ex) BIb_C = 0.0_dp
 
          ! psi_a
-         CALL calculate_wavefunction(mo_coeff, a, psi_a, rho_g, atomic_kind_set, &
-                                     qs_kind_set, cell, dft_control, particle_set, &
-                                     pw_env_sub, external_vector=my_Cvirt(:, a - (homo(1) + my_A_virtual_start) + 1))
+         CALL collocate_function(my_Cvirt(:, a - (homo(1) + my_A_virtual_start) + 1), &
+                                 psi_a, rho_g, atomic_kind_set, qs_kind_set, cell, particle_set, &
+                                 pw_env_sub, dft_control%qs_control%eps_rho_rspace)
          i_counter = 0
          DO i = my_I_occupied_start, my_I_occupied_end
             i_counter = i_counter + 1
@@ -418,7 +416,7 @@ CONTAINS
             CALL timeset(routineN//"_E_Cou", handle3)
             CALL dbcsr_iterator_start(iter, matrix_ia_jb(1))
             DO WHILE (dbcsr_iterator_blocks_left(iter))
-               CALL dbcsr_iterator_next_block(iter, row, col, data_block, blk, &
+               CALL dbcsr_iterator_next_block(iter, row, col, data_block, &
                                               row_size=row_size, col_size=col_size, &
                                               row_offset=row_offset, col_offset=col_offset)
                DO b = 1, col_size
@@ -434,7 +432,7 @@ CONTAINS
                ! Compute the coulomb only= SO = MP2 alpha-beta  MP2 energy component
                CALL dbcsr_iterator_start(iter, matrix_ia_jb(2))
                DO WHILE (dbcsr_iterator_blocks_left(iter))
-                  CALL dbcsr_iterator_next_block(iter, row, col, data_block, blk, &
+                  CALL dbcsr_iterator_next_block(iter, row, col, data_block, &
                                                  row_size=row_size, col_size=col_size, &
                                                  row_offset=row_offset, col_offset=col_offset)
                   DO b = 1, col_size
@@ -589,7 +587,7 @@ CONTAINS
       ! Mb
       mem_try = mem_try*8.0D+00/1024.0D+00**2
 
-   END SUBROUTINE
+   END SUBROUTINE estimate_memory_usage
 
 ! **************************************************************************************************
 !> \brief ...
@@ -753,8 +751,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'grep_occ_virt_wavefunc'
 
-      INTEGER                                            :: blk, col, col_offset, col_size, handle, &
-                                                            i, i_global, j, j_global, row, &
+      INTEGER                                            :: col, col_offset, col_size, handle, i, &
+                                                            i_global, j, j_global, row, &
                                                             row_offset, row_size
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: data_block
       TYPE(dbcsr_iterator_type)                          :: iter
@@ -770,7 +768,7 @@ CONTAINS
       ! accumulate data from mo_coeff_o into Cocc
       CALL dbcsr_iterator_start(iter, mo_coeff_o)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
-         CALL dbcsr_iterator_next_block(iter, row, col, data_block, blk, &
+         CALL dbcsr_iterator_next_block(iter, row, col, data_block, &
                                         row_size=row_size, col_size=col_size, &
                                         row_offset=row_offset, col_offset=col_offset)
          DO j = 1, col_size
@@ -790,7 +788,7 @@ CONTAINS
       ! accumulate data from mo_coeff_o into Cocc
       CALL dbcsr_iterator_start(iter, mo_coeff_v)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
-         CALL dbcsr_iterator_next_block(iter, row, col, data_block, blk, &
+         CALL dbcsr_iterator_next_block(iter, row, col, data_block, &
                                         row_size=row_size, col_size=col_size, &
                                         row_offset=row_offset, col_offset=col_offset)
          DO j = 1, col_size

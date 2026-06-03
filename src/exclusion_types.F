@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,10 +19,10 @@ MODULE exclusion_types
 !>      12.2010 created [Joost VandeVondele]
 ! **************************************************************************************************
    TYPE exclusion_type
-      INTEGER, POINTER, DIMENSION(:)        :: list_exclude_vdw
-      INTEGER, POINTER, DIMENSION(:)        :: list_exclude_ei
-      INTEGER, POINTER, DIMENSION(:)        :: list_onfo
-   END TYPE
+      INTEGER, POINTER, DIMENSION(:)        :: list_exclude_vdw => NULL()
+      INTEGER, POINTER, DIMENSION(:)        :: list_exclude_ei => NULL()
+      INTEGER, POINTER, DIMENSION(:)        :: list_onfo => NULL()
+   END TYPE exclusion_type
 
    PUBLIC :: exclusion_type, &
              exclusion_release

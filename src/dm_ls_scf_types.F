@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,7 +13,7 @@
 !> \author Joost VandeVondele
 ! **************************************************************************************************
 MODULE dm_ls_scf_types
-   USE dbcsr_api,                       ONLY: dbcsr_release,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_release,&
                                               dbcsr_type
    USE input_constants,                 ONLY: ls_cluster_atomic,&
                                               ls_cluster_molecular
@@ -43,14 +43,14 @@ MODULE dm_ls_scf_types
       INTEGER :: cluster_type = -1
       LOGICAL :: do_pao = .FALSE.
       INTEGER, DIMENSION(:), ALLOCATABLE :: atom_to_molecule
-      TYPE(dbcsr_type)                :: matrix_A
-      TYPE(dbcsr_type)                :: matrix_B
-   END TYPE
+      TYPE(dbcsr_type)                :: matrix_A = dbcsr_type()
+      TYPE(dbcsr_type)                :: matrix_B = dbcsr_type()
+   END TYPE ls_mstruct_type
 
    TYPE ls_mat_history_type
       INTEGER :: istore = 0, nstore = 0
       TYPE(dbcsr_type), DIMENSION(:, :), ALLOCATABLE :: matrix
-   END TYPE
+   END TYPE ls_mat_history_type
 
    TYPE ls_scf_curvy_type
       TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE :: matrix_dp
@@ -73,7 +73,7 @@ MODULE dm_ls_scf_types
       REAL(KIND=dp)                                    :: filter_factor = 0.0_dp
       REAL(KIND=dp)                                    :: min_shift = 0.0_dp
       REAL(KIND=dp)                                    :: min_filter = 0.0_dp
-   END TYPE
+   END TYPE ls_scf_curvy_type
 
    TYPE chebyshev_type
       LOGICAL :: compute_chebyshev = .FALSE.
@@ -83,7 +83,7 @@ MODULE dm_ls_scf_types
       REAL(KIND=dp), DIMENSION(:), POINTER :: max_energy => NULL()
       TYPE(section_vals_type), POINTER :: print_key_dos => NULL()
       TYPE(section_vals_type), POINTER :: print_key_cube => NULL()
-   END TYPE
+   END TYPE chebyshev_type
 
    TYPE ls_scf_env_type
       INTEGER               :: nspins = 0, natoms = 0
@@ -93,8 +93,11 @@ MODULE dm_ls_scf_types
       REAL(KIND=dp), DIMENSION(2) ::  homo_spin = 0.0_dp
       REAL(KIND=dp), DIMENSION(2) ::  lumo_spin = 0.0_dp
 
-      ! This prevents a bug in GCC up to version 9.x (9.5 seems to work though)
+#if defined(FTN_NO_DEFAULT_INIT)
       TYPE(ls_mat_history_type) :: scf_history = ls_mat_history_type(matrix=null())
+#else
+      TYPE(ls_mat_history_type) :: scf_history = ls_mat_history_type()
+#endif
       INTEGER :: extrapolation_order = -1
 
       LOGICAL :: has_unit_metric = .FALSE.
@@ -126,18 +129,23 @@ MODULE dm_ls_scf_types
       REAL(KIND=dp)         :: eps_diis = 0.0_dp
       REAL(KIND=dp)         :: energy_init = 0.0_dp
 
-      TYPE(dbcsr_type)   :: matrix_s_inv
-      TYPE(dbcsr_type)   :: matrix_s
-      TYPE(dbcsr_type)   :: matrix_bs_sqrt, matrix_bs_sqrt_inv
-      TYPE(dbcsr_type)   :: matrix_s_sqrt, matrix_s_sqrt_inv
+      TYPE(dbcsr_type)   :: matrix_s_inv = dbcsr_type()
+      TYPE(dbcsr_type)   :: matrix_s = dbcsr_type()
+      TYPE(dbcsr_type)   :: matrix_bs_sqrt = dbcsr_type(), matrix_bs_sqrt_inv = dbcsr_type()
+      TYPE(dbcsr_type)   :: matrix_s_sqrt = dbcsr_type(), matrix_s_sqrt_inv = dbcsr_type()
       TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE :: matrix_ks
       TYPE(dbcsr_type), DIMENSION(:), ALLOCATABLE :: matrix_p
 
       LOGICAL  :: report_all_sparsities = .FALSE., perform_mu_scan = .FALSE., use_s_sqrt = .FALSE.
 
-      TYPE(ls_mstruct_type) :: ls_mstruct
+#if defined(FTN_NO_DEFAULT_INIT)
+      TYPE(ls_mstruct_type) :: ls_mstruct = ls_mstruct_type(atom_to_molecule=NULL())
       TYPE(ls_scf_curvy_type) :: curvy_data = ls_scf_curvy_type(matrix_dp=null(), matrix_p=null(), &
                                                                 matrix_psave=null(), matrix_bch=null())
+#else
+      TYPE(ls_mstruct_type) :: ls_mstruct = ls_mstruct_type()
+      TYPE(ls_scf_curvy_type) :: curvy_data = ls_scf_curvy_type()
+#endif
 
       TYPE(chebyshev_type) :: chebyshev = chebyshev_type()
 
@@ -150,7 +158,11 @@ MODULE dm_ls_scf_types
 
       LOGICAL :: calculate_forces = .FALSE.
 
+#if defined(__PEXSI)
       TYPE(lib_pexsi_env) :: pexsi
+#else
+      TYPE(lib_pexsi_env) :: pexsi = lib_pexsi_env()
+#endif
 
       TYPE(mp_para_env_type), POINTER :: para_env => NULL()
       LOGICAL                 :: do_pao = .FALSE.

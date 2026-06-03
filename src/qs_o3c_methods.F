@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,7 +15,7 @@ MODULE qs_o3c_methods
    USE ai_overlap3,                     ONLY: overlap3
    USE basis_set_types,                 ONLY: gto_basis_set_p_type,&
                                               gto_basis_set_type
-   USE dbcsr_api,                       ONLY: dbcsr_get_block_p,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_get_block_p,&
                                               dbcsr_p_type,&
                                               dbcsr_type
    USE kinds,                           ONLY: dp
@@ -463,10 +463,10 @@ CONTAINS
             ! to access the dbcsr block at the same time. Prevent that by CRITICAL section but keep
             ! computations before hand in order to retain speed
 
-!$OMP CRITICAL
+!$OMP CRITICAL(omp_contract3_o3c)
             CALL dbcsr_get_block_p(matrix=matrix, row=irow, col=icol, BLOCK=pblock, found=found)
             CALL daxpy(s1*s2, 1.0_dp, work(:, :), 1, pblock(:, :), 1)
-!$OMP END CRITICAL
+!$OMP END CRITICAL(omp_contract3_o3c)
 
             DEALLOCATE (work)
          END IF

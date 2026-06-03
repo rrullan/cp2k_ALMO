@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,16 +13,16 @@
 ! **************************************************************************************************
 MODULE almo_scf_lbfgs_types
    !USE cp_external_control,             ONLY: external_control
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_get_default_unit_nr
-   !USE cp_log_handling,                 ONLY: cp_to_string
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
                                               dbcsr_copy,&
                                               dbcsr_create,&
-                                              dbcsr_dot,&
                                               dbcsr_release,&
                                               dbcsr_scale,&
                                               dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_dot
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr
+   !USE cp_log_handling,                 ONLY: cp_to_string
    USE kinds,                           ONLY: dp
 #include "./base/base_uses.f90"
 
@@ -209,7 +209,7 @@ CONTAINS
          !END IF
 
          IF (history%istore(vartype) <= history%nstore .AND. &
-             action .EQ. 1) THEN
+             action == 1) THEN
             !WRITE(*,*) "ZCRE: ispin,istore,vartype", ispin, istore, vartype
             CALL dbcsr_create(history%matrix(ispin, istore, vartype), &
                               template=matrix(ispin))
@@ -218,7 +218,7 @@ CONTAINS
             !END IF
          END IF
 
-         IF (action .EQ. 1) THEN
+         IF (action == 1) THEN
             CALL dbcsr_copy(history%matrix(ispin, istore, vartype), matrix(ispin))
          ELSE
             CALL dbcsr_add(history%matrix(ispin, istore, vartype), matrix(ispin), -1.0_dp, 1.0_dp)
@@ -228,7 +228,7 @@ CONTAINS
 
       ! allow the pointer to move forward only if deltas are stored (action==2)
       ! otherwise return the pointer to the previous value
-      IF (action .EQ. 1) THEN
+      IF (action == 1) THEN
          history%istore(vartype) = history%istore(vartype) - 1
       END IF
 
@@ -258,7 +258,7 @@ CONTAINS
       !   unit_nr = -1
       !ENDIF
 
-      IF (history%istore(1) .NE. history%istore(2)) THEN
+      IF (history%istore(1) /= history%istore(2)) THEN
          CPABORT("BFGS APIs are not used correctly")
       END IF
 
@@ -291,7 +291,7 @@ CONTAINS
 
             ! use the most recent term to
             ! compute gamma_k, Nocedal (7.20) and then get H0
-            IF (iterm .EQ. 1) THEN
+            IF (iterm == 1) THEN
                CALL dbcsr_dot(history%matrix(ispin, istore, 2), history%matrix(ispin, istore, 2), gammak)
                gammak = 1.0_dp/(gammak*history%rho(ispin, istore))
                !IF (unit_nr > 0) THEN
@@ -317,7 +317,7 @@ CONTAINS
          END DO ! iterm, forst loop from recent to oldest
 
          !RZK-warning: unclear whether q should be multiplied by minus one
-         CALL dbcsr_scale(q, -1.0)
+         CALL dbcsr_scale(q, -1.0_dp)
          CALL dbcsr_copy(direction(ispin), q)
 
          CALL dbcsr_release(q)

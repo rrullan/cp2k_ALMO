@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -10,7 +10,9 @@
 !> \author Ole Schuett
 ! **************************************************************************************************
 MODULE pao_types
-   USE dbcsr_api,                       ONLY: dbcsr_distribution_release,&
+   USE OMP_LIB,                         ONLY: omp_destroy_lock,&
+                                              omp_lock_kind
+   USE cp_dbcsr_api,                    ONLY: dbcsr_distribution_release,&
                                               dbcsr_distribution_type,&
                                               dbcsr_release,&
                                               dbcsr_type
@@ -18,6 +20,8 @@ MODULE pao_types
                                               default_string_length,&
                                               dp
    USE linesearch,                      ONLY: linesearch_type
+   USE torch_api,                       ONLY: torch_model_release,&
+                                              torch_model_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -26,7 +30,7 @@ MODULE pao_types
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'pao_types'
 
-   PUBLIC :: pao_env_type, training_matrix_type, pao_finalize
+   PUBLIC :: pao_env_type, training_matrix_type, pao_model_type, pao_finalize
 
    TYPE filename_type
       CHARACTER(LEN=default_path_length) :: fn = ""
@@ -49,6 +53,23 @@ MODULE pao_types
       REAL(dp), DIMENSION(:, :, :), ALLOCATABLE :: NN ! Neural Network
       REAL(dp), DIMENSION(:, :), ALLOCATABLE    :: GP ! Gaussian Process
    END TYPE training_matrix_type
+
+! **************************************************************************************************
+!> \brief PAO-ML model for a single atomic kind.
+! **************************************************************************************************
+   TYPE pao_model_type
+      TYPE(torch_model_type)                    :: torch_model
+      INTEGER                                   :: version = -1
+      CHARACTER(LEN=default_string_length)      :: kind_name = ""
+      INTEGER                                   :: atomic_number = -1
+      CHARACTER(LEN=default_string_length)      :: prim_basis_name = ""
+      INTEGER                                   :: prim_basis_size = -1
+      INTEGER                                   :: pao_basis_size = -1
+      INTEGER                                   :: num_layers = -1
+      REAL(dp)                                  :: cutoff = 0.0_dp
+      INTEGER, DIMENSION(:), ALLOCATABLE        :: kinds_mapping
+      INTEGER(kind=omp_lock_kind)               :: lock = -1
+   END TYPE pao_model_type
 
 ! **************************************************************************************************
 !> \brief The PAO environment type
@@ -147,6 +168,7 @@ MODULE pao_types
       INTEGER                          :: optimizer = -1
       INTEGER                          :: cg_init_steps = -1
       LOGICAL                          :: precondition = .FALSE.
+      LOGICAL                          :: ignore_convergence_failure = .FALSE.
       CHARACTER(LEN=default_path_length) :: preopt_dm_file = ""
       CHARACTER(LEN=default_path_length) :: restart_file = ""
       TYPE(filename_type), DIMENSION(:), ALLOCATABLE :: ml_training_set
@@ -201,8 +223,11 @@ MODULE pao_types
       TYPE(training_matrix_type), ALLOCATABLE, &
          DIMENSION(:)                  :: ml_training_matrices
 
+      TYPE(pao_model_type), ALLOCATABLE, &
+         DIMENSION(:)                  :: models
+
       TYPE(dbcsr_distribution_type)     :: diag_distribution
-   END TYPE
+   END TYPE pao_env_type
 
 CONTAINS
 
@@ -215,7 +240,7 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'pao_finalize'
 
-      INTEGER                                            :: handle
+      INTEGER                                            :: handle, i
 
       CALL timeset(routineN, handle)
 
@@ -230,6 +255,16 @@ CONTAINS
       DEALLOCATE (pao%ml_training_set)
       IF (ALLOCATED(pao%ml_training_matrices)) &
          DEALLOCATE (pao%ml_training_matrices)
+
+      IF (ALLOCATED(pao%models)) THEN
+         DO i = 1, SIZE(pao%models)
+            IF (pao%models(i)%version > 0) THEN
+               CALL torch_model_release(pao%models(i)%torch_model)
+            END IF
+            CALL omp_destroy_lock(pao%models(i)%lock)
+         END DO
+         DEALLOCATE (pao%models)
+      END IF
 
       CALL dbcsr_distribution_release(pao%diag_distribution)
 

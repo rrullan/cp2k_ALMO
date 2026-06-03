@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,11 +22,11 @@ MODULE cp_dbcsr_cp2k_link
                                               Schuett2016,&
                                               cite_reference
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_operations,             ONLY: max_elements_per_block
-   USE dbcsr_api,                       ONLY: &
+   USE cp_dbcsr_api,                    ONLY: &
         dbcsr_finalize, dbcsr_get_block_p, dbcsr_get_default_config, dbcsr_get_matrix_type, &
         dbcsr_has_symmetry, dbcsr_reserve_blocks, dbcsr_set, dbcsr_set_config, dbcsr_type, &
         dbcsr_type_no_symmetry
+   USE cp_dbcsr_operations,             ONLY: max_elements_per_block
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
                                               keyword_type
@@ -99,7 +99,7 @@ CONTAINS
       CALL section_create(section, __LOCATION__, name="DBCSR", &
                           description="Configuration options for the DBCSR library.", &
                           n_keywords=1, n_subsections=0, repeats=.FALSE., &
-                          citations=(/Borstnik2014, Schuett2016/))
+                          citations=[Borstnik2014, Schuett2016])
 
       NULLIFY (keyword)
 
@@ -117,15 +117,15 @@ CONTAINS
                           usage="mm_driver blas", &
                           default_i_val=mm_driver_auto, &
                           enum_c_vals=s2a("AUTO", "BLAS", "MATMUL", "SMM", "XSMM"), &
-                          enum_i_vals=(/mm_driver_auto, mm_driver_blas, mm_driver_matmul, mm_driver_smm, &
-                                        mm_driver_xsmm/), &
+                          enum_i_vals=[mm_driver_auto, mm_driver_blas, mm_driver_matmul, mm_driver_smm, &
+                                       mm_driver_xsmm], &
                           enum_desc=s2a("Choose automatically the best available driver", &
                                         "BLAS (requires the BLAS library at link time)", &
                                         "Fortran MATMUL", &
                                         "Library optimised for Small Matrix Multiplies "// &
                                         "(requires the SMM library at link time)", &
                                         "LIBXSMM"), &
-                          citations=(/Heinecke2016/))
+                          citations=[Heinecke2016])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -489,7 +489,7 @@ CONTAINS
             new_atom_b = .FALSE.
             CYCLE
          END IF
-         IF (blk_cnt + nadd .GT. SIZE(rows)) THEN
+         IF (blk_cnt + nadd > SIZE(rows)) THEN
             ALLOCATE (tmp(blk_cnt + nadd))
             tmp(1:blk_cnt) = rows(1:blk_cnt)
             DEALLOCATE (rows)
@@ -609,7 +609,7 @@ CONTAINS
       CALL basis_set_list_setup(basis_set_list_b, "ORB", qs_kind_set)
 
       ! csr_sparsity can obtain values 0 (if zero element) or 1 (if non-zero element)
-      CALL dbcsr_set(csr_sparsity, 0.0)
+      CALL dbcsr_set(csr_sparsity, 0.0_dp)
 
       CALL neighbor_list_iterator_create(nl_iterator, neighbour_list)
 
@@ -674,7 +674,7 @@ CONTAINS
                   DO jshell = 1, nshell_b(jset)
                      gto_loop: DO ipgf = 1, npgf_a(iset)
                         DO jpgf = 1, npgf_b(jset)
-                           IF (rpgfa(ipgf, iset) + rpgfb(jpgf, jset) .GE. dab) THEN
+                           IF (rpgfa(ipgf, iset) + rpgfb(jpgf, jset) >= dab) THEN
                               ! more selective screening with radius calculated for each primitive GTO
                               r_a = exp_radius(l_a(ishell, iset), &
                                                zet_a(ipgf, iset), &
@@ -684,8 +684,8 @@ CONTAINS
                                                zet_b(jpgf, jset), &
                                                eps_pgf_orb, &
                                                gcc_b(jpgf, jshell, jset))
-                              IF (r_a + r_b .GE. dab) THEN
-                                 IF (irow .EQ. iatom) THEN
+                              IF (r_a + r_b >= dab) THEN
+                                 IF (irow == iatom) THEN
                                     screen_blk(isgf + 1:isgf + nso(l_a(ishell, iset)), &
                                                jsgf + 1:jsgf + nso(l_b(jshell, jset))) = 1.0_dp
                                  ELSE

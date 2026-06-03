@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,13 +20,13 @@ MODULE pexsi_types
    USE bibliography,                    ONLY: Lin2009,&
                                               Lin2013,&
                                               cite_reference
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_get_default_unit_nr,&
-                                              cp_logger_type
-   USE dbcsr_api,                       ONLY: dbcsr_csr_type,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_csr_type,&
                                               dbcsr_p_type,&
                                               dbcsr_scale,&
                                               dbcsr_type
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
+                                              cp_logger_type
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_comm_type,&
                                               mp_dims_create
@@ -85,25 +85,30 @@ MODULE pexsi_types
 !> \author Patrick Seewald
 ! **************************************************************************************************
    TYPE lib_pexsi_env
-      TYPE(dbcsr_type)                         :: dbcsr_template_matrix_sym, &
-                                                  dbcsr_template_matrix_nonsym
-      TYPE(dbcsr_csr_type)                     :: csr_mat_p, csr_mat_ks, csr_mat_s, &
-                                                  csr_mat_E, csr_mat_F
+      TYPE(dbcsr_type)                         :: dbcsr_template_matrix_sym = dbcsr_type(), &
+                                                  dbcsr_template_matrix_nonsym = dbcsr_type()
+      TYPE(dbcsr_csr_type)                     :: csr_mat_p = dbcsr_csr_type(), csr_mat_ks = dbcsr_csr_type(), &
+                                                  csr_mat_s = dbcsr_csr_type(), csr_mat_E = dbcsr_csr_type(), &
+                                                  csr_mat_F = dbcsr_csr_type()
+#if defined(__PEXSI)
       TYPE(cp_pexsi_options)                   :: options
+#else
+      TYPE(cp_pexsi_options)                   :: options = cp_pexsi_options()
+#endif
       REAL(KIND=dp), DIMENSION(:), POINTER     :: kTS => NULL()
       TYPE(dbcsr_p_type), DIMENSION(:), &
          POINTER                               :: matrix_w => NULL()
-      INTEGER(KIND=C_INTPTR_T)                 :: plan
-      INTEGER                                  :: nspin, num_ranks_per_pole
-      TYPE(mp_comm_type) :: mp_group
+      INTEGER(KIND=C_INTPTR_T)                 :: plan = 0_C_INTPTR_T
+      INTEGER                                  :: nspin = -1, num_ranks_per_pole = -1
+      TYPE(mp_comm_type)                       :: mp_group = mp_comm_type()
       TYPE(dbcsr_type), DIMENSION(:), &
-         POINTER                               :: max_ev_vector
-      TYPE(dbcsr_type)                         :: csr_sparsity
-      INTEGER, DIMENSION(2)                    :: mp_dims
+         POINTER                               :: max_ev_vector => NULL()
+      TYPE(dbcsr_type)                         :: csr_sparsity = dbcsr_type()
+      INTEGER, DIMENSION(2)                    :: mp_dims = -1
 
-      LOGICAL                                  :: csr_screening, do_adaptive_tol_nel
-      REAL(KIND=dp)                            :: adaptive_nel_alpha, adaptive_nel_beta, &
-                                                  tol_nel_initial, tol_nel_target
+      LOGICAL                                  :: csr_screening = .FALSE., do_adaptive_tol_nel = .FALSE.
+      REAL(KIND=dp)                            :: adaptive_nel_alpha = -1.0_dp, adaptive_nel_beta = -1.0_dp, &
+                                                  tol_nel_initial = -1.0_dp, tol_nel_target = -1.0_dp
    END TYPE lib_pexsi_env
 
 CONTAINS
@@ -120,7 +125,7 @@ CONTAINS
    SUBROUTINE lib_pexsi_init(pexsi_env, mp_group, nspin)
       TYPE(lib_pexsi_env), INTENT(INOUT)                 :: pexsi_env
 
-      CLASS(mp_comm_type), INTENT(IN)                     :: mp_group
+      CLASS(mp_comm_type), INTENT(IN)                    :: mp_group
       INTEGER, INTENT(IN)                                :: nspin
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'lib_pexsi_init'
@@ -142,24 +147,24 @@ CONTAINS
       CALL cite_reference(Lin2013)
 
       pexsi_env%mp_group = mp_group
-      ASSOCIATE (numnodes => pexsi_env%mp_group%num_pe, mynode => pexsi_env%mp_group%mepos)
+      ASSOCIATE (numnodes => pexsi_env%mp_group%num_pe)
 
          ! Use all nodes available per pole by default or if the user tries to use
          ! more nodes than MPI size
-         IF ((pexsi_env%num_ranks_per_pole .GT. numnodes) &
-             .OR. (pexsi_env%num_ranks_per_pole .EQ. 0)) THEN
+         IF ((pexsi_env%num_ranks_per_pole > numnodes) &
+             .OR. (pexsi_env%num_ranks_per_pole == 0)) THEN
             pexsi_env%num_ranks_per_pole = numnodes
          END IF
 
          ! Find num_ranks_per_pole from user input MIN_RANKS_PER_POLE s.t. num_ranks_per_pole
          ! is the smallest number greater or equal to min_ranks_per_pole that divides
          ! MPI size without remainder.
-         DO WHILE (MOD(numnodes, pexsi_env%num_ranks_per_pole) .NE. 0)
+         DO WHILE (MOD(numnodes, pexsi_env%num_ranks_per_pole) /= 0)
             pexsi_env%num_ranks_per_pole = pexsi_env%num_ranks_per_pole + 1
          END DO
 
          CALL cp_pexsi_get_options(pexsi_env%options, npSymbFact=npSymbFact)
-         IF ((npSymbFact .GT. pexsi_env%num_ranks_per_pole) .OR. (npSymbFact .EQ. 0)) THEN
+         IF ((npSymbFact > pexsi_env%num_ranks_per_pole) .OR. (npSymbFact == 0)) THEN
             ! Use maximum possible number of ranks for symbolic factorization
             CALL cp_pexsi_set_options(pexsi_env%options, npSymbFact=pexsi_env%num_ranks_per_pole)
          END IF
@@ -180,7 +185,7 @@ CONTAINS
 
          ! Initialize PEXSI
          pexsi_env%plan = cp_pexsi_plan_initialize(pexsi_env%mp_group, pexsi_env%mp_dims(1), &
-                                                   pexsi_env%mp_dims(2), mynode)
+                                                   pexsi_env%mp_dims(2), -1)
       END ASSOCIATE
 
       pexsi_env%do_adaptive_tol_nel = .FALSE.
@@ -315,7 +320,7 @@ CONTAINS
       CASE (1)
          WRITE (unit_nr, '(A,T61,A20)') " PEXSI|   Row permutation strategy", "make diagonal entry larger than off diagonal"
       END SELECT
-      IF (ordering .EQ. 0) WRITE (unit_nr, '(A,T61,I20/)') &
+      IF (ordering == 0) WRITE (unit_nr, '(A,T61,I20/)') &
          " PEXSI|   Number of processors for symbolic factorization", npSymbFact
 
    END SUBROUTINE print_pexsi_info

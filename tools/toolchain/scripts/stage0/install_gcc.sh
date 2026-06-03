@@ -6,8 +6,10 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-gcc_ver="13.2.0"
-gcc_sha256="8cb4be3796651976f94b9356fa08d833524f62420d6292c5033a9a26af315078"
+gcc_ver="14.3.0"
+gcc_sha256="ace8b8b0dbfe6abfc22f821cb093e195aa5498b7ccf7cd23e4424b9f14afed22"
+#gcc_ver="15.1.0"
+#gcc_sha256="51b9919ea69c980d7a381db95d4be27edf73b21254eb13d752a08003b4d013b1"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -17,9 +19,6 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_gcc" ] && rm "${BUILDDIR}/setup_gcc"
 
-GCC_LDFLAGS=""
-GCC_CFLAGS=""
-TSANFLAGS=""
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
@@ -31,20 +30,15 @@ case "${with_gcc}" in
     if verify_checksums "${install_lock_file}"; then
       echo "gcc-${gcc_ver} is already installed, skipping it."
     else
-      if [ -f gcc-${gcc_ver}.tar.gz ]; then
-        echo "gcc-${gcc_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${gcc_sha256}" "gcc-${gcc_ver}.tar.gz"
-      fi
+      retrieve_package "${gcc_sha256}" "gcc-${gcc_ver}.tar.gz"
+      echo "Installing GCC from scratch into ${pkg_install_dir}"
       [ -d gcc-${gcc_ver} ] && rm -rf gcc-${gcc_ver}
       tar -xzf gcc-${gcc_ver}.tar.gz
-
-      echo "Installing GCC from scratch into ${pkg_install_dir}"
       cd gcc-${gcc_ver}
 
       # Download prerequisites from cp2k.org because gcc.gnu.org returns 403 when queried from GCP.
       sed -i 's|http://gcc.gnu.org/pub/gcc/infrastructure/|https://cp2k.org/static/downloads/|' ./contrib/download_prerequisites
-      ./contrib/download_prerequisites > prereq.log 2>&1 || tail -n ${LOG_LINES} prereq.log
+      ./contrib/download_prerequisites > prereq.log 2>&1 || tail_excerpt prereq.log
       GCCROOT=${PWD}
       mkdir obj
       cd obj
@@ -58,7 +52,7 @@ case "${with_gcc}" in
       # TODO: Unfortunately, we can not simply use --disable-shared, because
       # it would break OpenBLAS build and probably others too.
       COMMON_FLAGS="-O2 -fPIC -fno-omit-frame-pointer -fopenmp -g"
-      CFLAGS="${COMMON_FLAGS} -std=gnu99"
+      CFLAGS="${COMMON_FLAGS}"
       CXXFLAGS="${CFLAGS}"
       FCFLAGS="${COMMON_FLAGS} -fbacktrace"
       ${GCCROOT}/configure --prefix="${pkg_install_dir}" \
@@ -67,13 +61,13 @@ case "${with_gcc}" in
         --disable-multilib --disable-bootstrap \
         --enable-lto \
         --enable-plugins \
-        > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
+        > configure.log 2>&1 || tail_excerpt configure.log
       make -j $(get_nprocs) \
         CFLAGS="${CFLAGS}" \
         CXXFLAGS="${CXXFLAGS}" \
         FCFLAGS="${FCFLAGS}" \
-        > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-      make -j $(get_nprocs) install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+        > make.log 2>&1 || tail_excerpt make.log
+      make -j $(get_nprocs) install > install.log 2>&1 || tail_excerpt install.log
       # thread sanitizer
       if [ ${ENABLE_TSAN} = "__TRUE__" ]; then
         # now the tricky bit... we need to recompile in particular
@@ -84,7 +78,7 @@ case "${with_gcc}" in
         # gcc, tested with 5.1.0 based on
         # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=55374#c10
         cd x86_64*/libgfortran
-        make clean > clean.log 2>&1 || tail -n ${LOG_LINES} clean.log
+        make clean > clean.log 2>&1 || tail_excerpt clean.log
         CFLAGS="${CFLAGS} -fsanitize=thread"
         CXXFLAGS="${CXXFLAGS} -fsanitize=thread"
         FCFLAGS="${FCFLAGS} -fsanitize=thread"
@@ -93,17 +87,17 @@ case "${with_gcc}" in
           CXXFLAGS="${CXXFLAGS}" \
           FCFLAGS="${FCFLAGS}" \
           LDFLAGS="-B$(pwd)/../libsanitizer/tsan/.libs/ -Wl,-rpath,$(pwd)/../libsanitizer/tsan/.libs/ -fsanitize=thread" \
-          > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          > make.log 2>&1 || tail_excerpt make.log
+        make install > install.log 2>&1 || tail_excerpt install.log
         cd ../libgomp
-        make clean > clean.log 2>&1 || tail -n ${LOG_LINES} clean.log
+        make clean > clean.log 2>&1 || tail_excerpt clean.log
         make -j $(get_nprocs) \
           CFLAGS="${CFLAGS}" \
           CXXFLAGS="${CXXFLAGS}" \
           FCFLAGS="${FCFLAGS}" \
           LDFLAGS="-B$(pwd)/../libsanitizer/tsan/.libs/ -Wl,-rpath,$(pwd)/../libsanitizer/tsan/.libs/ -fsanitize=thread" \
-          > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          > make.log 2>&1 || tail_excerpt make.log
+        make install > install.log 2>&1 || tail_excerpt install.log
         cd ${GCCROOT}/obj/
       fi
       cd ../..
@@ -122,6 +116,7 @@ case "${with_gcc}" in
     check_command gcc "gcc" && CC="$(command -v gcc)" || exit 1
     check_command g++ "gcc" && CXX="$(command -v g++)" || exit 1
     check_command gfortran "gcc" && FC="$(command -v gfortran)" || exit 1
+    echo "GCC compiler version $(gcc -dumpfullversion) found"
     F90="${FC}"
     F77="${FC}"
     add_include_from_paths -p GCC_CFLAGS "c++" ${INCLUDE_PATHS}
@@ -177,7 +172,7 @@ export GCC_CFLAGS="${GCC_CFLAGS}"
 export GCC_LDFLAGS="${GCC_LDFLAGS}"
 export TSANFLAGS="${TSANFLAGS}"
 EOF
-  cat "${BUILDDIR}/setup_gcc" >> ${SETUPFILE}
+  filter_setup "${BUILDDIR}/setup_gcc" "${SETUPFILE}"
 fi
 
 # ----------------------------------------------------------------------

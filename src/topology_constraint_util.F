@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,7 +14,8 @@ MODULE topology_constraint_util
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind,&
                                               is_hydrogen
-   USE cell_types,                      ONLY: use_perd_x,&
+   USE cell_types,                      ONLY: cell_transform_input_cartesian,&
+                                              use_perd_x,&
                                               use_perd_xy,&
                                               use_perd_xyz,&
                                               use_perd_xz,&
@@ -617,7 +618,7 @@ CONTAINS
             CALL get_molecule_kind(molecule_kind=molecule_kind, &
                                    nmolecule=nmolecule, molecule_list=molecule_list, name=molname)
             is_qm = qmmm_ff_precond_only_qm(id1=molname)
-            WHERE (molname .EQ. cons_info%fixed_molnames)
+            WHERE (molname == cons_info%fixed_molnames)
                missed_molname = .FALSE.
             END WHERE
             ! Try to figure out how many atoms of the list belong to this molecule_kind
@@ -628,7 +629,7 @@ CONTAINS
                fix_atom_molname = .FALSE.
                IF (ASSOCIATED(cons_info%fixed_molnames)) THEN
                   DO k = 1, SIZE(cons_info%fixed_molnames)
-                     IF (cons_info%fixed_molnames(k) .EQ. molname) THEN
+                     IF (cons_info%fixed_molnames(k) == molname) THEN
                         fix_atom_molname = .TRUE.
                         IF (is_qm .AND. cons_info%fixed_exclude_qm(k)) fix_atom_molname = .FALSE.
                         IF ((.NOT. is_qm) .AND. cons_info%fixed_exclude_mm(k)) fix_atom_molname = .FALSE.
@@ -666,7 +667,7 @@ CONTAINS
                   fix_atom_molname = .FALSE.
                   IF (ASSOCIATED(cons_info%fixed_molnames)) THEN
                      DO k1loc = 1, SIZE(cons_info%fixed_molnames)
-                        IF (cons_info%fixed_molnames(k1loc) .EQ. molname) THEN
+                        IF (cons_info%fixed_molnames(k1loc) == molname) THEN
                            fix_atom_molname = .TRUE.
                            itype = cons_info%fixed_mol_type(k1loc)
                            EXIT
@@ -733,6 +734,14 @@ CONTAINS
                      END IF
                      ! Let's store the atom index
                      IF (fix_fixed_atom .OR. fix_atom_qmmm .OR. fix_atom_molname) THEN
+                        IF (ASSOCIATED(topology%cell_muc)) THEN
+                           IF (topology%cell_muc%input_cell_canonicalized .AND. itype /= use_perd_xyz) THEN
+                              CALL cp_abort(__LOCATION__, &
+                                            "Partial FIXED_ATOMS components cannot be transformed "// &
+                                            "after CELL%CANONICALIZE. Use COMPONENTS_TO_FIX XYZ or "// &
+                                            "disable CELL%CANONICALIZE for this input.")
+                           END IF
+                        END IF
                         kk = kk + 1
                         fixd_list(kk)%fixd = k
                         fixd_list(kk)%coord = particle_set(k)%r
@@ -804,6 +813,8 @@ CONTAINS
                               CASE (use_perd_xyz)
                                  CPASSERT(SIZE(r) == 3)
                                  fixd_list(kk)%coord(1:3) = r(1:3)
+                                 IF (ASSOCIATED(topology%cell_muc)) &
+                                    CALL cell_transform_input_cartesian(topology%cell_muc, fixd_list(kk)%coord)
                               END SELECT
                            ELSE
                               ! Write coord0 value for restraint

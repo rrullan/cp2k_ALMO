@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,7 +23,8 @@ MODULE qs_integrate_potential
    USE grid_api,                        ONLY: integrate_pgf_product
    USE qs_integrate_potential_product,  ONLY: integrate_v_dbasis,&
                                               integrate_v_rspace
-   USE qs_integrate_potential_single,   ONLY: integrate_ppl_rspace,&
+   USE qs_integrate_potential_single,   ONLY: integrate_function,&
+                                              integrate_ppl_rspace,&
                                               integrate_rho_nlcc,&
                                               integrate_v_core_rspace,&
                                               integrate_v_gaussian_rspace,&
@@ -48,6 +49,7 @@ MODULE qs_integrate_potential
              integrate_v_rspace_diagonal, &
              integrate_v_core_rspace, &
              integrate_v_gaussian_rspace, &
+             integrate_function, &
              integrate_ppl_rspace, &
              integrate_rho_nlcc
 

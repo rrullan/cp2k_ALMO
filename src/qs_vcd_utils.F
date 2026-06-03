@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -9,6 +9,13 @@ MODULE qs_vcd_utils
    USE cell_types,                      ONLY: cell_type
    USE commutator_rpnl,                 ONLY: build_com_mom_nl
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_create,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type_antisymmetric,&
+                                              dbcsr_type_no_symmetry
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
@@ -31,13 +38,6 @@ MODULE qs_vcd_utils
                                               cp_print_key_unit_nr
    USE cp_result_methods,               ONLY: get_results
    USE cp_result_types,                 ONLY: cp_result_type
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_create,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type_antisymmetric,&
-                                              dbcsr_type_no_symmetry
    USE input_constants,                 ONLY: use_mom_ref_user
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -79,10 +79,10 @@ MODULE qs_vcd_utils
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_vcd_utils'
 
-   REAL(dp), DIMENSION(3, 3, 3), PARAMETER  :: Levi_Civita = RESHAPE((/ &
+   REAL(dp), DIMENSION(3, 3, 3), PARAMETER  :: Levi_Civita = RESHAPE([ &
                                                           0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, &
                                                           0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, -1.0_dp, 0.0_dp, 0.0_dp, &
-                                             0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp/), (/3, 3, 3/))
+                                                0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp], [3, 3, 3])
 
 CONTAINS
 
@@ -220,17 +220,17 @@ CONTAINS
       ALLOCATE (vcd_env%op_dV(nspins))
       ALLOCATE (vcd_env%op_dB(nspins))
       DO ispin = 1, nspins
-         CALL cp_fm_create(vcd_env%dCV(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct)
-         CALL cp_fm_create(vcd_env%dCV_prime(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct)
-         CALL cp_fm_create(vcd_env%op_dV(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct)
-         CALL cp_fm_create(vcd_env%op_dB(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct)
+         CALL cp_fm_create(vcd_env%dCV(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(vcd_env%dCV_prime(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(vcd_env%op_dV(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(vcd_env%op_dB(ispin), vcd_env%dcdr_env%likemos_fm_struct(1)%struct, set_zero=.TRUE.)
       END DO
 
       ALLOCATE (vcd_env%dCB(3))
       ALLOCATE (vcd_env%dCB_prime(3))
       DO i = 1, 3
-         CALL cp_fm_create(vcd_env%dCB(i), vcd_env%dcdr_env%likemos_fm_struct(1)%struct)
-         CALL cp_fm_create(vcd_env%dCB_prime(i), vcd_env%dcdr_env%likemos_fm_struct(1)%struct)
+         CALL cp_fm_create(vcd_env%dCB(i), vcd_env%dcdr_env%likemos_fm_struct(1)%struct, set_zero=.TRUE.)
+         CALL cp_fm_create(vcd_env%dCB_prime(i), vcd_env%dcdr_env%likemos_fm_struct(1)%struct, set_zero=.TRUE.)
       END DO
 
       ! DBCSR matrices
@@ -599,14 +599,14 @@ CONTAINS
 
          ! check that the number nao, nmo and nspins are
          ! the same as in the current mos
-         IF (nspins_tmp .NE. nspins) THEN
+         IF (nspins_tmp /= nspins) THEN
             CPABORT("nspins not consistent")
          END IF
-         IF (nao_tmp .NE. nao) CPABORT("nao not consistent")
+         IF (nao_tmp /= nao) CPABORT("nao not consistent")
          ! check that it's the right file
          ! the same as in the current mos
-         IF (lambda_tmp .NE. lambda) CPABORT("lambda not consistent")
-         IF (beta_tmp .NE. beta) CPABORT("beta not consistent")
+         IF (lambda_tmp /= lambda) CPABORT("lambda not consistent")
+         IF (beta_tmp /= beta) CPABORT("beta not consistent")
          !
          DO ispin = 1, nspins
             CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff)
@@ -614,7 +614,7 @@ CONTAINS
             !
             IF (rst_unit > 0) READ (rst_unit) nmo_tmp
             CALL para_env%bcast(nmo_tmp)
-            IF (nmo_tmp .NE. nmo) CPABORT("nmo not consistent")
+            IF (nmo_tmp /= nmo) CPABORT("nmo not consistent")
             !
             ! read the response
             DO i = 1, nmo, MAX(max_block, 1)

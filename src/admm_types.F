@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,6 +19,7 @@ MODULE admm_types
                                               cite_reference
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: admm_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_release,&
@@ -26,7 +27,6 @@ MODULE admm_types
    USE cp_fm_types,                     ONLY: cp_fm_create,&
                                               cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_constants,                 ONLY: do_admm_aux_exch_func_none,&
                                               do_admm_blocked_projection,&
                                               do_admm_blocking_purify_full,&
@@ -69,11 +69,11 @@ MODULE admm_types
 
    TYPE eigvals_type
       REAL(dp), DIMENSION(:), POINTER          :: DATA => NULL()
-   END TYPE
+   END TYPE eigvals_type
 
    TYPE eigvals_p_type
       TYPE(eigvals_type), POINTER              :: eigvals => NULL()
-   END TYPE
+   END TYPE eigvals_p_type
 
 ! **************************************************************************************************
 !> \brief A subtype of the admm_env that contains the extra data needed for an ADMM GAPW calculation
@@ -198,7 +198,7 @@ MODULE admm_types
       TYPE(cp_fm_type), DIMENSION(:), &
          POINTER                               :: mo_derivs_aux_fit => NULL()
 
-   END TYPE
+   END TYPE admm_type
 
 CONTAINS
 
@@ -352,7 +352,7 @@ CONTAINS
          CALL cp_fm_create(admm_env%lambda_inv2(ispin), fm_struct_nmo_nmo, name="lambda_inv2")
          CALL cp_fm_create(admm_env%C_hat(ispin), fm_struct_aux_nmo, name="C_hat")
          CALL cp_fm_create(admm_env%P_tilde(ispin), fm_struct_aux_aux, name="P_tilde")
-         CALL cp_fm_create(admm_env%ks_to_be_merged(ispin), fm_struct_orb_orb, name="KS_to_be_merged ")
+         CALL cp_fm_create(admm_env%ks_to_be_merged(ispin), fm_struct_orb_orb, name="KS_to_be_merged")
 
          ALLOCATE (admm_env%eigvals_lambda(ispin)%eigvals)
          ALLOCATE (admm_env%eigvals_P_to_be_purified(ispin)%eigvals)

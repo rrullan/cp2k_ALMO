@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,7 +15,8 @@
 ! **************************************************************************************************
 MODULE colvar_methods
 
-   USE cell_types,                      ONLY: cell_type,&
+   USE cell_types,                      ONLY: cell_transform_input_cartesian,&
+                                              cell_type,&
                                               pbc
    USE colvar_types,                    ONLY: &
         HBP_colvar_id, Wc_colvar_id, acid_hyd_dist_colvar_id, acid_hyd_shell_colvar_id, &
@@ -115,15 +116,17 @@ CONTAINS
 !> \param icol number of the current colvar (repetition in colvar_section)
 !> \param colvar_section the colvar section
 !> \param para_env ...
+!> \param cell ...
 !> \par History
 !>      04.2004 created [alessandro laio and fawzi mohamed]
 !> \author teo
 ! **************************************************************************************************
-   RECURSIVE SUBROUTINE colvar_read(colvar, icol, colvar_section, para_env)
+   RECURSIVE SUBROUTINE colvar_read(colvar, icol, colvar_section, para_env, cell)
       TYPE(colvar_type), POINTER                         :: colvar
       INTEGER, INTENT(IN)                                :: icol
       TYPE(section_vals_type), POINTER                   :: colvar_section
       TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(cell_type), OPTIONAL, POINTER                 :: cell
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'colvar_read'
 
@@ -245,7 +248,7 @@ CONTAINS
          ! Distance
          wrk_section => distance_section
          CALL colvar_create(colvar, dist_colvar_id)
-         CALL colvar_check_points(colvar, distance_section)
+         CALL colvar_check_points(colvar, distance_section, cell)
          CALL section_vals_val_get(distance_section, "ATOMS", i_vals=iatms)
          colvar%dist_param%i_at = iatms(1)
          colvar%dist_param%j_at = iatms(2)
@@ -255,14 +258,14 @@ CONTAINS
          ! Angle
          wrk_section => angle_section
          CALL colvar_create(colvar, angle_colvar_id)
-         CALL colvar_check_points(colvar, angle_section)
+         CALL colvar_check_points(colvar, angle_section, cell)
          CALL section_vals_val_get(angle_section, "ATOMS", i_vals=iatms)
          colvar%angle_param%i_at_angle = iatms
       ELSE IF (my_subsection(3)) THEN
          ! Torsion
          wrk_section => torsion_section
          CALL colvar_create(colvar, torsion_colvar_id)
-         CALL colvar_check_points(colvar, torsion_section)
+         CALL colvar_check_points(colvar, torsion_section, cell)
          CALL section_vals_val_get(torsion_section, "ATOMS", i_vals=iatms)
          colvar%torsion_param%i_at_tors = iatms
          colvar%torsion_param%o0 = 0.0_dp
@@ -270,7 +273,7 @@ CONTAINS
          ! Coordination
          wrk_section => coordination_section
          CALL colvar_create(colvar, coord_colvar_id)
-         CALL colvar_check_points(colvar, coordination_section)
+         CALL colvar_check_points(colvar, coordination_section, cell)
          NULLIFY (colvar%coord_param%i_at_from, colvar%coord_param%c_kinds_from)
          NULLIFY (colvar%coord_param%i_at_to, colvar%coord_param%c_kinds_to)
          NULLIFY (colvar%coord_param%i_at_to_b, colvar%coord_param%c_kinds_to_b)
@@ -390,7 +393,7 @@ CONTAINS
          ! Distance point from plane
          wrk_section => plane_dist_section
          CALL colvar_create(colvar, plane_distance_colvar_id)
-         CALL colvar_check_points(colvar, plane_dist_section)
+         CALL colvar_check_points(colvar, plane_dist_section, cell)
          CALL section_vals_val_get(plane_dist_section, "ATOMS_PLANE", i_vals=iatms)
          CPASSERT(SIZE(iatms) == 3)
          colvar%plane_distance_param%plane = iatms
@@ -401,7 +404,7 @@ CONTAINS
          ! Rotation colvar of a segment w.r.t. another segment
          wrk_section => rotation_section
          CALL colvar_create(colvar, rotation_colvar_id)
-         CALL colvar_check_points(colvar, rotation_section)
+         CALL colvar_check_points(colvar, rotation_section, cell)
          CALL section_vals_val_get(rotation_section, "P1_BOND1", i_val=colvar%rotation_param%i_at1_bond1)
          CALL section_vals_val_get(rotation_section, "P2_BOND1", i_val=colvar%rotation_param%i_at2_bond1)
          CALL section_vals_val_get(rotation_section, "P1_BOND2", i_val=colvar%rotation_param%i_at1_bond2)
@@ -410,7 +413,7 @@ CONTAINS
          ! Difference of two distances
          wrk_section => dfunct_section
          CALL colvar_create(colvar, dfunct_colvar_id)
-         CALL colvar_check_points(colvar, dfunct_section)
+         CALL colvar_check_points(colvar, dfunct_section, cell)
          CALL section_vals_val_get(dfunct_section, "ATOMS", i_vals=iatms)
          colvar%dfunct_param%i_at_dfunct = iatms
          CALL section_vals_val_get(dfunct_section, "COEFFICIENT", r_val=colvar%dfunct_param%coeff)
@@ -419,7 +422,7 @@ CONTAINS
          ! Q Parameter
          wrk_section => qparm_section
          CALL colvar_create(colvar, qparm_colvar_id)
-         CALL colvar_check_points(colvar, qparm_section)
+         CALL colvar_check_points(colvar, qparm_section, cell)
          CALL section_vals_val_get(qparm_section, "RCUT", r_val=colvar%qparm_param%rcut)
          CALL section_vals_val_get(qparm_section, "RSTART", r_val=colvar%qparm_param%rstart)
          CALL section_vals_val_get(qparm_section, "INCLUDE_IMAGES", l_val=colvar%qparm_param%include_images)
@@ -516,7 +519,7 @@ CONTAINS
             IF (ncol > 0) THEN
                DO i = 1, ncol
                   NULLIFY (colvar%reaction_path_param%colvar_p(i)%colvar)
-                  CALL colvar_read(colvar%reaction_path_param%colvar_p(i)%colvar, i, colvar_subsection, para_env)
+                  CALL colvar_read(colvar%reaction_path_param%colvar_p(i)%colvar, i, colvar_subsection, para_env, cell)
                END DO
             ELSE
                CPABORT("CV REACTION PATH: the number of CV to define the path must be >0 ")
@@ -605,7 +608,7 @@ CONTAINS
          ! Parsing the real COLVARs
          DO i = 1, ncol
             NULLIFY (colvar%combine_cvs_param%colvar_p(i)%colvar)
-            CALL colvar_read(colvar%combine_cvs_param%colvar_p(i)%colvar, i, colvar_subsection, para_env)
+            CALL colvar_read(colvar%combine_cvs_param%colvar_p(i)%colvar, i, colvar_subsection, para_env, cell)
          END DO
          ! Function definition
          CALL section_vals_val_get(combine_section, "FUNCTION", c_val=colvar%combine_cvs_param%function)
@@ -644,7 +647,7 @@ CONTAINS
          ! Population
          wrk_section => population_section
          CALL colvar_create(colvar, population_colvar_id)
-         CALL colvar_check_points(colvar, population_section)
+         CALL colvar_check_points(colvar, population_section, cell)
 
          NULLIFY (colvar%population_param%i_at_from, colvar%population_param%c_kinds_from)
          NULLIFY (colvar%population_param%i_at_to, colvar%population_param%c_kinds_to)
@@ -719,7 +722,7 @@ CONTAINS
          ! Angle between two planes
          wrk_section => plane_plane_angle_section
          CALL colvar_create(colvar, plane_plane_angle_colvar_id)
-         CALL colvar_check_points(colvar, plane_plane_angle_section)
+         CALL colvar_check_points(colvar, plane_plane_angle_section, cell)
          ! Read the specification of the two planes
          plane_sections => section_vals_get_subs_vals(plane_plane_angle_section, "PLANE")
          CALL section_vals_get(plane_sections, n_repetition=n_var)
@@ -732,6 +735,10 @@ CONTAINS
             CALL section_vals_val_get(plane_sections, "NORMAL_VECTOR", i_rep_section=1, &
                                       r_vals=s1)
             colvar%plane_plane_angle_param%plane1%normal_vec = s1
+            IF (PRESENT(cell)) THEN
+               IF (ASSOCIATED(cell)) &
+                  CALL cell_transform_input_cartesian(cell, colvar%plane_plane_angle_param%plane1%normal_vec)
+            END IF
          ELSE
             CALL section_vals_val_get(plane_sections, "ATOMS", i_rep_section=1, &
                                       i_vals=iatms)
@@ -745,6 +752,10 @@ CONTAINS
             CALL section_vals_val_get(plane_sections, "NORMAL_VECTOR", i_rep_section=2, &
                                       r_vals=s1)
             colvar%plane_plane_angle_param%plane2%normal_vec = s1
+            IF (PRESENT(cell)) THEN
+               IF (ASSOCIATED(cell)) &
+                  CALL cell_transform_input_cartesian(cell, colvar%plane_plane_angle_param%plane2%normal_vec)
+            END IF
          ELSE
             CALL section_vals_val_get(plane_sections, "ATOMS", i_rep_section=2, &
                                       i_vals=iatms)
@@ -754,7 +765,7 @@ CONTAINS
          ! Gyration Radius
          wrk_section => gyration_section
          CALL colvar_create(colvar, gyration_colvar_id)
-         CALL colvar_check_points(colvar, gyration_section)
+         CALL colvar_check_points(colvar, gyration_section, cell)
 
          NULLIFY (colvar%gyration_param%i_at, colvar%gyration_param%c_kinds)
 
@@ -799,14 +810,12 @@ CONTAINS
          CALL section_vals_get(frame_section, n_repetition=nr_frame)
 
          colvar%rmsd_param%nr_frames = nr_frame
-         ! Calculation is aborted if reference frame are less than 2
+         ! Calculation is aborted if reference frame are less than 1 and more than 2
          CPASSERT(nr_frame >= 1 .AND. nr_frame <= 2)
          CALL read_frames(frame_section, para_env, nr_frame, colvar%rmsd_param%r_ref, &
                           colvar%rmsd_param%n_atoms)
-
          ALLOCATE (colvar%rmsd_param%weights(colvar%rmsd_param%n_atoms))
          colvar%rmsd_param%weights = 0.0_dp
-
          CALL section_vals_val_get(rmsd_section, "SUBSET_TYPE", i_val=colvar%rmsd_param%subset)
          IF (colvar%rmsd_param%subset == rmsd_all) THEN
             ALLOCATE (colvar%rmsd_param%i_rmsd(colvar%rmsd_param%n_atoms))
@@ -871,11 +880,12 @@ CONTAINS
          END IF
 
          CALL section_vals_val_get(rmsd_section, "ALIGN_FRAMES", l_val=colvar%rmsd_param%align_frames)
+
       ELSE IF (my_subsection(17)) THEN
          ! Work on XYZ positions of atoms
          wrk_section => xyz_diag_section
          CALL colvar_create(colvar, xyz_diag_colvar_id)
-         CALL colvar_check_points(colvar, wrk_section)
+         CALL colvar_check_points(colvar, wrk_section, cell)
          CALL section_vals_val_get(wrk_section, "ATOM", i_val=iatm)
          CALL section_vals_val_get(wrk_section, "COMPONENT", i_val=icomponent)
          CALL section_vals_val_get(wrk_section, "PBC", l_val=colvar%xyz_diag_param%use_pbc)
@@ -886,7 +896,7 @@ CONTAINS
          ! Work on the outer diagonal (two atoms A,B) XYZ positions
          wrk_section => xyz_outerdiag_section
          CALL colvar_create(colvar, xyz_outerdiag_colvar_id)
-         CALL colvar_check_points(colvar, wrk_section)
+         CALL colvar_check_points(colvar, wrk_section, cell)
          CALL section_vals_val_get(wrk_section, "ATOMS", i_vals=iatms)
          colvar%xyz_outerdiag_param%i_atoms = iatms
          CALL section_vals_val_get(wrk_section, "COMPONENT_A", i_val=icomponent)
@@ -905,7 +915,7 @@ CONTAINS
          ! Wc hydrogen bond
          wrk_section => Wc_section
          CALL colvar_create(colvar, Wc_colvar_id)
-         CALL colvar_check_points(colvar, Wc_section)
+         CALL colvar_check_points(colvar, Wc_section, cell)
          CALL section_vals_val_get(Wc_section, "ATOMS", i_vals=iatms)
          CALL section_vals_val_get(wrk_section, "RCUT", r_val=my_val(1))
          colvar%Wc%rcut = cp_unit_to_cp2k(my_val(1), "angstrom")
@@ -914,7 +924,7 @@ CONTAINS
          ! HBP colvar
          wrk_section => HBP_section
          CALL colvar_create(colvar, HBP_colvar_id)
-         CALL colvar_check_points(colvar, HBP_section)
+         CALL colvar_check_points(colvar, HBP_section, cell)
          CALL section_vals_val_get(wrk_section, "NPOINTS", i_val=colvar%HBP%nPoints)
          CALL section_vals_val_get(wrk_section, "RCUT", r_val=my_val(1))
          colvar%HBP%rcut = cp_unit_to_cp2k(my_val(1), "angstrom")
@@ -946,7 +956,7 @@ CONTAINS
          ! Minimum Distance
          wrk_section => mindist_section
          CALL colvar_create(colvar, mindist_colvar_id)
-         CALL colvar_check_points(colvar, mindist_section)
+         CALL colvar_check_points(colvar, mindist_section, cell)
          NULLIFY (colvar%mindist_param%i_dist_from, colvar%mindist_param%i_coord_from, &
                   colvar%mindist_param%k_coord_from, colvar%mindist_param%i_coord_to, &
                   colvar%mindist_param%k_coord_to)
@@ -1217,9 +1227,9 @@ CONTAINS
             WRITE (iw, '( A,T71,G10.5)') ' COLVARS| DX', &
                colvar%combine_cvs_param%dx
          CASE (reaction_path_colvar_id)
-            CPWARN("Description header for REACTION_PATH COLVAR missing!!")
+            CPWARN("Description header for REACTION_PATH COLVAR missing!")
          CASE (distance_from_path_colvar_id)
-            CPWARN("Description header for REACTION_PATH COLVAR missing!!")
+            CPWARN("Description header for REACTION_PATH COLVAR missing!")
          CASE (hydronium_shell_colvar_id)
             WRITE (iw, '( A,T71,I10)') ' COLVARS| POH', colvar%hydronium_shell_param%poh
             WRITE (iw, '( A,T71,I10)') ' COLVARS| QOH', colvar%hydronium_shell_param%qoh
@@ -1268,13 +1278,13 @@ CONTAINS
             WRITE (iw, '( A,T71,F10.5)') ' COLVARS| NC', colvar%acid_hyd_shell_param%nc
             WRITE (iw, '( A,T71,F10.5)') ' COLVARS| LAMBDA', colvar%acid_hyd_shell_param%lambda
          CASE (rmsd_colvar_id)
-            CPWARN("Description header for RMSD COLVAR missing!!")
+            CPWARN("Description header for RMSD COLVAR missing!")
          CASE (xyz_diag_colvar_id)
             NULLIFY (section, keyword, enum)
             CALL create_colvar_xyz_d_section(section)
             keyword => section_get_keyword(section, "COMPONENT")
             CALL keyword_get(keyword, enum=enum)
-            tag_comp = enum_i2c(enum, colvar%xyz_diag_param%component)
+            tag_comp = TRIM(enum_i2c(enum, colvar%xyz_diag_param%component))
             CALL section_release(section)
 
             WRITE (iw, '( A,T57,3I8)') ' COLVARS| POSITION ('//TRIM(tag_comp) &
@@ -1284,10 +1294,10 @@ CONTAINS
             CALL create_colvar_xyz_od_section(section)
             keyword => section_get_keyword(section, "COMPONENT_A")
             CALL keyword_get(keyword, enum=enum)
-            tag_comp1 = enum_i2c(enum, colvar%xyz_outerdiag_param%components(1))
+            tag_comp1 = TRIM(enum_i2c(enum, colvar%xyz_outerdiag_param%components(1)))
             keyword => section_get_keyword(section, "COMPONENT_B")
             CALL keyword_get(keyword, enum=enum)
-            tag_comp2 = enum_i2c(enum, colvar%xyz_outerdiag_param%components(2))
+            tag_comp2 = TRIM(enum_i2c(enum, colvar%xyz_outerdiag_param%components(2)))
             CALL section_release(section)
 
             WRITE (iw, '( A,T57,3I8)') ' COLVARS| CROSS TERM POSITION ('//TRIM(tag_comp1) &
@@ -1410,7 +1420,7 @@ CONTAINS
       CALL section_vals_val_get(section, "OXYGENS", n_rep_val=n_var)
       ndim = 0
       DO k = 1, n_var
-         CALL section_vals_val_get(section, "OXYGENS", i_vals=iatms)
+         CALL section_vals_val_get(section, "OXYGENS", i_rep_val=k, i_vals=iatms)
          CALL reallocate(i_oxygens, 1, ndim + SIZE(iatms))
          i_oxygens(ndim + 1:ndim + SIZE(iatms)) = iatms
          ndim = ndim + SIZE(iatms)
@@ -1420,7 +1430,7 @@ CONTAINS
       CALL section_vals_val_get(section, "HYDROGENS", n_rep_val=n_var)
       ndim = 0
       DO k = 1, n_var
-         CALL section_vals_val_get(section, "HYDROGENS", i_vals=iatms)
+         CALL section_vals_val_get(section, "HYDROGENS", i_rep_val=k, i_vals=iatms)
          CALL reallocate(i_hydrogens, 1, ndim + SIZE(iatms))
          i_hydrogens(ndim + 1:ndim + SIZE(iatms)) = iatms
          ndim = ndim + SIZE(iatms)
@@ -1487,7 +1497,7 @@ CONTAINS
       CALL section_vals_val_get(section, "OXYGENS_WATER", n_rep_val=n_var)
       ndim = 0
       DO k = 1, n_var
-         CALL section_vals_val_get(section, "OXYGENS_WATER", i_vals=iatms)
+         CALL section_vals_val_get(section, "OXYGENS_WATER", i_rep_val=k, i_vals=iatms)
          CALL reallocate(i_oxygens_water, 1, ndim + SIZE(iatms))
          i_oxygens_water(ndim + 1:ndim + SIZE(iatms)) = iatms
          ndim = ndim + SIZE(iatms)
@@ -1497,7 +1507,7 @@ CONTAINS
       CALL section_vals_val_get(section, "OXYGENS_ACID", n_rep_val=n_var)
       ndim = 0
       DO k = 1, n_var
-         CALL section_vals_val_get(section, "OXYGENS_ACID", i_vals=iatms)
+         CALL section_vals_val_get(section, "OXYGENS_ACID", i_rep_val=k, i_vals=iatms)
          CALL reallocate(i_oxygens_acid, 1, ndim + SIZE(iatms))
          i_oxygens_acid(ndim + 1:ndim + SIZE(iatms)) = iatms
          ndim = ndim + SIZE(iatms)
@@ -1507,7 +1517,7 @@ CONTAINS
       CALL section_vals_val_get(section, "HYDROGENS", n_rep_val=n_var)
       ndim = 0
       DO k = 1, n_var
-         CALL section_vals_val_get(section, "HYDROGENS", i_vals=iatms)
+         CALL section_vals_val_get(section, "HYDROGENS", i_rep_val=k, i_vals=iatms)
          CALL reallocate(i_hydrogens, 1, ndim + SIZE(iatms))
          i_hydrogens(ndim + 1:ndim + SIZE(iatms)) = iatms
          ndim = ndim + SIZE(iatms)
@@ -1551,11 +1561,13 @@ CONTAINS
 !> \brief Check and setup about the use of geometrical points instead of atoms
 !> \param colvar the colvat to initialize
 !> \param section ...
+!> \param cell ...
 !> \author Teodoro Laino, [teo] 03.2007
 ! **************************************************************************************************
-   SUBROUTINE colvar_check_points(colvar, section)
+   SUBROUTINE colvar_check_points(colvar, section, cell)
       TYPE(colvar_type), POINTER                         :: colvar
       TYPE(section_vals_type), POINTER                   :: section
+      TYPE(cell_type), OPTIONAL, POINTER                 :: cell
 
       INTEGER                                            :: i, irep, natoms, npoints, nrep, nweights
       INTEGER, DIMENSION(:), POINTER                     :: atoms
@@ -1612,6 +1624,9 @@ CONTAINS
                ! Define the point as a fixed point in space..
                CALL section_vals_val_get(point_sections, "XYZ", i_rep_section=i, r_vals=r)
                colvar%points(i)%r = r
+               IF (PRESENT(cell)) THEN
+                  IF (ASSOCIATED(cell)) CALL cell_transform_input_cartesian(cell, colvar%points(i)%r)
+               END IF
             END SELECT
          END DO
       END IF
@@ -2508,7 +2523,7 @@ CONTAINS
       t = MIN(1.0_dp, ABS(t))*SIGN(1.0_dp, t)
       colvar%ss = ACOS(t)
 
-      IF ((ABS(colvar%ss) .LT. tolerance_acos) .OR. (ABS(colvar%ss - pi) .LT. tolerance_acos)) THEN
+      IF ((ABS(colvar%ss) < tolerance_acos) .OR. (ABS(colvar%ss - pi) < tolerance_acos)) THEN
          fmod = 0.0_dp
       ELSE
          fmod = -1.0_dp/SIN(colvar%ss)
@@ -2676,7 +2691,7 @@ CONTAINS
       t2 = 1.0_dp/(a*b**3.0_dp)
       t3 = DOT_PRODUCT(xij, xkj)
       colvar%ss = ACOS(t3*t0)
-      IF ((ABS(colvar%ss) .LT. tolerance_acos) .OR. (ABS(colvar%ss - pi) .LT. tolerance_acos)) THEN
+      IF ((ABS(colvar%ss) < tolerance_acos) .OR. (ABS(colvar%ss - pi) < tolerance_acos)) THEN
          fmod = 0.0_dp
       ELSE
          fmod = -1.0_dp/SIN(colvar%ss)
@@ -2827,7 +2842,7 @@ CONTAINS
       t2 = 1.0_dp/(a*b**3.0_dp)
       t3 = DOT_PRODUCT(xij, xkj)
       colvar%ss = ACOS(t3*t0)
-      IF ((ABS(colvar%ss) .LT. tolerance_acos) .OR. (ABS(colvar%ss - pi) .LT. tolerance_acos)) THEN
+      IF ((ABS(colvar%ss) < tolerance_acos) .OR. (ABS(colvar%ss - pi) < tolerance_acos)) THEN
          fmod = 0.0_dp
       ELSE
          fmod = -1.0_dp/SIN(colvar%ss)
@@ -3006,17 +3021,17 @@ CONTAINS
       rt2 = xt*xt + yt*yt + zt*zt
       ru2 = xu*xu + yu*yu + zu*zu
       rtru = SQRT(rt2*ru2)
-      IF (rtru .NE. 0.0_dp) THEN
+      IF (rtru /= 0.0_dp) THEN
          rcb = SQRT(xcb*xcb + ycb*ycb + zcb*zcb)
          cosine = (xt*xu + yt*yu + zt*zu)/rtru
          sine = (xcb*xtu + ycb*ytu + zcb*ztu)/(rcb*rtru)
          cosine = MIN(1.0_dp, MAX(-1.0_dp, cosine))
          angle = ACOS(cosine)
-         IF (sine .LT. 0.0_dp) angle = -angle
+         IF (sine < 0.0_dp) angle = -angle
          !
          dt = angle ! [rad]
          dt = MOD(2.0E4_dp*pi + dt - o0, 2.0_dp*pi)
-         IF (dt .GT. pi) dt = dt - 2.0_dp*pi
+         IF (dt > pi) dt = dt - 2.0_dp*pi
          dt = o0 + dt
          colvar%torsion_param%o0 = dt
          !
@@ -3142,7 +3157,7 @@ CONTAINS
          CALL cp_subsys_get(subsys, particles=particles_i)
          my_particles => particles_i%els
       END IF
-      CPASSERT(r1cut .LT. rcut)
+      CPASSERT(r1cut < rcut)
       denominator_tolerance = 1.0E-8_dp
 
       !ri_step=0.1
@@ -3196,16 +3211,16 @@ CONTAINS
                      DO bb = -ncells(2), ncells(2)
                         DO cc = -ncells(3), ncells(3)
                            ! do not include the central atom
-                           IF (i == j .AND. aa .EQ. 0 .AND. bb .EQ. 0 .AND. cc .EQ. 0) CYCLE
+                           IF (i == j .AND. aa == 0 .AND. bb == 0 .AND. cc == 0) CYCLE
                            shift(1) = REAL(aa, KIND=dp)
                            shift(2) = REAL(bb, KIND=dp)
                            shift(3) = REAL(cc, KIND=dp)
                            xij = MATMUL(cell%hmat, ss0(:) + shift(:))
                            rij = SQRT(DOT_PRODUCT(xij, xij))
                            !IF (rij > rcut) THEN
-                           !   IF (mm.EQ.0) WRITE(*,'(A8,4F10.5)') " --", shift, rij
+                           !   IF (mm==0) WRITE(*,'(A8,4F10.5)') " --", shift, rij
                            !ELSE
-                           !   IF (mm.EQ.0) WRITE(*,'(A8,4F10.5)') " ++", shift, rij
+                           !   IF (mm==0) WRITE(*,'(A8,4F10.5)') " ++", shift, rij
                            !ENDIF
                            IF (rij > rcut) CYCLE
 
@@ -3223,7 +3238,7 @@ CONTAINS
                   IF (i == j) CYCLE jloop
                   xij(:) = xpj(:) - xpi(:)
                   rij = SQRT(DOT_PRODUCT(xij, xij))
-                  IF (rij > rcut) CYCLE
+                  IF (rij > rcut) CYCLE jloop
 
                   ! update qlm
                   CALL accumulate_qlm_over_neigbors(xij, rij, rcut, r1cut, &
@@ -3237,13 +3252,13 @@ CONTAINS
             ! this factor is necessary if one whishes to sum over m=0,L
             ! instead of m=-L,+L. This is off now because it is cheap and safe
             fact = 1.0_dp
-            !IF (ABS(mm) .GT. 0) THEN
+            !IF (ABS(mm) > 0) THEN
             !   fact = 2.0_dp
             !ELSE
             !   fact = 1.0_dp
             !ENDIF
 
-            IF (nbond .LT. denominator_tolerance) THEN
+            IF (nbond < denominator_tolerance) THEN
                CPWARN("QPARM: number of neighbors is very close to zero!")
             END IF
 
@@ -3312,12 +3327,12 @@ CONTAINS
       !bond = 1.0_dp/(1.0_dp+EXP(alpha*(rij-rcut)))
       ! RZK: infinitely differentiable smooth cutoff function
       ! that is precisely 1.0 below r1cut and precisely 0.0 above rcut
-      IF (rij .GT. rcut) THEN
+      IF (rij > rcut) THEN
          !bond = 0.0_dp
          !exp_fac = 0.0_dp
          RETURN
       ELSE
-         IF (rij .LT. r1cut) THEN
+         IF (rij < r1cut) THEN
             bond = 1.0_dp
             exp_fac = 0.0_dp
          ELSE
@@ -3331,8 +3346,8 @@ CONTAINS
       END IF
       ! compute continuous bond order
       nbond = nbond + bond
-      IF (ABS(xij(1)) .LT. denominator_tolerance &
-          .AND. ABS(xij(2)) .LT. denominator_tolerance) THEN
+      IF (ABS(xij(1)) < denominator_tolerance &
+          .AND. ABS(xij(2)) < denominator_tolerance) THEN
          fi = 0.0_dp
       ELSE
          fi = ATAN2(xij(2), xij(1))
@@ -3899,7 +3914,8 @@ CONTAINS
       fcut = num_cut*invden_cut
 
       !Final distance acid - hydronium
-      fbrace = rion_num/rion_den/2.0_dp
+!      fbrace = rion_num/rion_den/2.0_dp
+      fbrace = rion_num/rion_den/n_oxygens_acid
       rion = fcut*fbrace
       colvar%ss = rion
 
@@ -3922,14 +3938,18 @@ CONTAINS
       DO kk = 1, n_oxygens_acid
          DO ii = 1, n_oxygens_water
             colvar%dsdr(1:3, offsetO + kk) = colvar%dsdr(1:3, offsetO + kk) &
-                                             + fcut*ddist_rik(1:3, ii, kk)*expfac(ii)/rion_den/2.0_dp
+                                             + fcut*ddist_rik(1:3, ii, kk)*expfac(ii)/rion_den/n_oxygens_acid
+!                                             + fcut*ddist_rik(1:3, ii, kk)*expfac(ii)/rion_den/2.0_dp
             colvar%dsdr(1:3, ii) = colvar%dsdr(1:3, ii) &
-                                   - fcut*ddist_rik(1:3, ii, kk)*expfac(ii)/rion_den/2.0_dp
+                                   - fcut*ddist_rik(1:3, ii, kk)*expfac(ii)/rion_den/n_oxygens_acid
+!                                   - fcut*ddist_rik(1:3, ii, kk)*expfac(ii)/rion_den/2.0_dp
             DO jj = 1, n_hydrogens
                colvar%dsdr(1:3, ii) = colvar%dsdr(1:3, ii) &
-                                      + fcut*dexpfac_rik(ii, kk)*dnwoh(1:3, jj, ii)/rion_den/2.0_dp
+                                      + fcut*dexpfac_rik(ii, kk)*dnwoh(1:3, jj, ii)/rion_den/n_oxygens_acid
+!                                      + fcut*dexpfac_rik(ii, kk)*dnwoh(1:3, jj, ii)/rion_den/2.0_dp
                colvar%dsdr(1:3, offsetH + jj) = colvar%dsdr(1:3, offsetH + jj) &
-                                                - fcut*dexpfac_rik(ii, kk)*dnwoh(1:3, jj, ii)/rion_den/2.0_dp
+                                                - fcut*dexpfac_rik(ii, kk)*dnwoh(1:3, jj, ii)/rion_den/n_oxygens_acid
+!                                                - fcut*dexpfac_rik(ii, kk)*dnwoh(1:3, jj, ii)/rion_den/2.0_dp
             END DO
          END DO
       END DO
@@ -4221,7 +4241,7 @@ CONTAINS
             j = colvar%coord_param%i_at_to(jj)
             CALL get_coordinates(colvar, j, xpj, my_particles)
             ! define coordination of atom A with itself to be 0. also fixes rij==0 for the force calculation
-            IF (i .EQ. j) CYCLE
+            IF (i == j) CYCLE
             ss = MATMUL(cell%h_inv, xpi(:) - xpj(:))
             ss = ss - NINT(ss)
             xij = MATMUL(cell%hmat, ss)
@@ -4248,7 +4268,7 @@ CONTAINS
                func_k = 0.0_dp
                DO kk = 1, n_atoms_to_b
                   k = colvar%coord_param%i_at_to_b(kk)
-                  IF (k .EQ. j) CYCLE
+                  IF (k == j) CYCLE
                   CALL get_coordinates(colvar, k, xpk, my_particles)
                   ss = MATMUL(cell%h_inv, xpj(:) - xpk(:))
                   ss = ss - NINT(ss)
@@ -4378,9 +4398,6 @@ CONTAINS
             nLcoord(i) = nLcoord(i) + num_n*inv_den_n
          END DO
          expnL(i) = EXP(lambda*nLcoord(i))
-!dbg
-! write(*,*) ii,nLcoord(i),expnL(i)
-!dbg
          den_Q = den_Q + expnL(i)
       END DO
       inv_den_Q = 1.0_dp/den_Q
@@ -4399,9 +4416,6 @@ CONTAINS
             rij = pbc(rpj, rpi, cell)
             r12 = SQRT(rij(1)*rij(1) + rij(2)*rij(2) + rij(3)*rij(3))
 
-!dbg
-! write(*,*) ii,jj,rpi(1:3),rpj(1:3),rij(1:3),r12
-!dbg
             num_Q = num_Q + r12*expnL(j)
 
             sum_rij(j) = sum_rij(j) + r12
@@ -4417,10 +4431,6 @@ CONTAINS
       qfunc = num_Q*inv_den_Q
       dqfunc_dr = dqfunc_dr*inv_den_Q
       colvar%ss = qfunc
-!dbg
-!      write(*,*) ' ss ',  colvar%ss
-! stop
-!dbg
 
       DO i = 1, n_coord_from
          dqfunc_dnL(i) = lambda*expnL(i)*inv_den_Q*(sum_rij(i) - num_Q*inv_den_Q)
@@ -5762,7 +5772,7 @@ CONTAINS
       INTEGER                                            :: count1, i
 
       k = 1
-      IF (v_count .LT. ncol) THEN
+      IF (v_count < ncol) THEN
          count1 = v_count + 1
          DO i = p_bounds(1, count1), p_bounds(2, count1)
             gp(count1) = REAL(i, KIND=dp)*grid_sp(count1)

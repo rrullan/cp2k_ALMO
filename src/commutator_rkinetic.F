@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,7 +17,7 @@ MODULE commutator_rkinetic
    USE ai_kinetic,                      ONLY: kinetic
    USE basis_set_types,                 ONLY: gto_basis_set_p_type,&
                                               gto_basis_set_type
-   USE dbcsr_api,                       ONLY: dbcsr_get_block_p,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_get_block_p,&
                                               dbcsr_p_type
    USE kinds,                           ONLY: dp
    USE orbital_pointers,                ONLY: coset,&
@@ -351,4 +351,3 @@ CONTAINS
    END SUBROUTINE comab_opr
 
 END MODULE commutator_rkinetic
-

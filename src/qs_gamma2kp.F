@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,9 +12,9 @@
 !> \author JGH
 ! **************************************************************************************************
 MODULE qs_gamma2kp
-   USE cp_subsys_types,                 ONLY: cp_subsys_type
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
                                               dbcsr_p_type
+   USE cp_subsys_types,                 ONLY: cp_subsys_type
    USE input_constants,                 ONLY: atomic_guess,&
                                               xc_none
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
@@ -107,7 +107,7 @@ CONTAINS
       CALL qs_env_create(qs_env_kp)
       CALL qs_init(qs_env_kp, para_env, cp_subsys=cp_subsys, kpoint_env=kpoint, &
                    force_env_section=force_env_section, subsys_section=subsys_section, &
-                   use_motion_section=.FALSE.)
+                   use_motion_section=.FALSE., silent=.TRUE.)
 
       CALL get_qs_env(qs_env_kp, scf_control=scf_control)
       scf_control%density_guess = atomic_guess

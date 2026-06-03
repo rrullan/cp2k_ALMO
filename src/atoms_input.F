@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,7 +20,8 @@
 MODULE atoms_input
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind
-   USE cell_types,                      ONLY: cell_type,&
+   USE cell_types,                      ONLY: cell_transform_input_cartesian,&
+                                              cell_type,&
                                               pbc,&
                                               scaled_to_real
    USE cp_linked_list_input,            ONLY: cp_sll_val_next,&
@@ -245,6 +246,7 @@ CONTAINS
             CALL scaled_to_real(atom_info%r(:, iatom), r0, cell)
          ELSE
             atom_info%r(:, iatom) = atom_info%r(:, iatom)*unit_conv
+            CALL cell_transform_input_cartesian(cell, atom_info%r(:, iatom))
          END IF
       END DO
       IF (my_save_mem) CALL section_vals_remove_values(coord_section)
@@ -419,9 +421,10 @@ CONTAINS
             IF ((TRIM(at_name(ishell)) == TRIM(name_kind)) .AND. is_shell) THEN
                sh_index = particle_set(at_index(ishell))%shell_index
                IF (shell_scaled_coordinates) THEN
-                  CALL scaled_to_real(r(:, ishell), shell_particle_set(sh_index)%r(:), cell)
+                  CALL scaled_to_real(shell_particle_set(sh_index)%r(:), r(:, ishell), cell)
                ELSE
                   shell_particle_set(sh_index)%r(:) = r(:, ishell)*unit_conv_shell
+                  CALL cell_transform_input_cartesian(cell, shell_particle_set(sh_index)%r(:))
                END IF
                shell_particle_set(sh_index)%atom_index = at_index(ishell)
 
@@ -436,9 +439,10 @@ CONTAINS
                   rab = pbc(shell_particle_set(sh_index)%r, core_particle_set(sh_index)%r, cell)
                ELSE IF (explicit) THEN
                   IF (core_scaled_coordinates) THEN
-                     CALL scaled_to_real(rc(:, ishell), core_particle_set(sh_index)%r(:), cell)
+                     CALL scaled_to_real(core_particle_set(sh_index)%r(:), rc(:, ishell), cell)
                   ELSE
                      core_particle_set(sh_index)%r(:) = rc(:, ishell)*unit_conv_core
+                     CALL cell_transform_input_cartesian(cell, core_particle_set(sh_index)%r(:))
                   END IF
                   core_particle_set(sh_index)%atom_index = at_index_c(ishell)
                   rab = pbc(shell_particle_set(sh_index)%r, core_particle_set(sh_index)%r, cell)
@@ -451,7 +455,7 @@ CONTAINS
                dab = SQRT(rab(1)*rab(1) + rab(2)*rab(2) + rab(3)*rab(3))
                IF (shell%max_dist > 0.0_dp .AND. shell%max_dist < dab) THEN
                   IF (output_unit > 0) THEN
-                     WRITE (output_unit, *) "WARNING : shell and core for atom ", at_index(ishell), " seem to be too distant. "
+                     WRITE (output_unit, *) "WARNING : shell and core for atom ", at_index(ishell), " seem to be too distant."
                   END IF
                END IF
 

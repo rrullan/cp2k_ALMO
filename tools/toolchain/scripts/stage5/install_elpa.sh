@@ -7,8 +7,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
 # From https://elpa.mpcdf.mpg.de/software/tarball-archive/ELPA_TARBALL_ARCHIVE.html
-elpa_ver="2023.05.001"
-elpa_sha256="ec64be5d6522810d601a3b8e6a31720e3c3eb4af33a434d8a64570d76e6462b6"
+elpa_ver="2026.02.001"
+elpa_sha256="a379f27f4dbd27b2ee45017afec656d064301e97150c874649bdfd64957b75ed"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -18,24 +18,18 @@ source "${INSTALLDIR}"/toolchain.env
 
 [ -f "${BUILDDIR}/setup_elpa" ] && rm "${BUILDDIR}/setup_elpa"
 
-ELPA_CFLAGS=''
-ELPA_LDFLAGS=''
-ELPA_LIBS=''
 elpa_dir_openmp="_openmp"
 
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
 
-# elpa only works with MPI switched on
-if [ $MPI_MODE = no ]; then
-  report_warning $LINENO "MPI is disabled, skipping elpa installation"
-  cat << EOF > "${BUILDDIR}/setup_elpa"
-with_elpa="__FALSE__"
-EOF
+# ELPA works only with MPI switched on
+if [ "${MPI_MODE}" = "no" ]; then
+  report_warning ${LINENO} "MPI is disabled, skipping ELPA installation"
   exit 0
 fi
 
-case "$with_elpa" in
+case "${with_elpa}" in
   __INSTALL__)
     echo "==================== Installing ELPA ===================="
     pkg_install_dir="${INSTALLDIR}/elpa-${elpa_ver}"
@@ -48,18 +42,15 @@ case "$with_elpa" in
         # extra LDFLAGS needed
         cray_ldflags="-dynamic"
       fi
-      enable_openmp="no"
+      # enable_openmp="no"
     fi
 
     if verify_checksums "${install_lock_file}"; then
       echo "elpa-${elpa_ver} is already installed, skipping it."
     else
       require_env MATH_LIBS
-      if [ -f elpa-${elpa_ver}.tar.gz ]; then
-        echo "elpa-${elpa_ver}.tar.gz is found"
-      else
-        download_pkg_from_cp2k_org "${elpa_sha256}" "elpa-${elpa_ver}.tar.gz"
-      fi
+      retrieve_package "${elpa_sha256}" "elpa-${elpa_ver}.tar.gz"
+      echo "Installing from scratch into ${pkg_install_dir}"
       [ -d elpa-${elpa_ver} ] && rm -rf elpa-${elpa_ver}
       tar -xzf elpa-${elpa_ver}.tar.gz
 
@@ -67,12 +58,16 @@ case "$with_elpa" in
       # with long lines, and that a bunch of libs can be found
       cd elpa-${elpa_ver}
 
+      # Ensure a successful installation of nVidia version built with "-std=c++14" flag
+      sed -i 's/creal(/__real__(/g' src/GPU/CUDA/cudaFunctions_template.h
+      sed -i 's/cimag(/__imag__(/g' src/GPU/CUDA/cudaFunctions_template.h
+
       # ELPA-2017xxxx enables AVX2 by default, switch off if machine doesn't support it.
       AVX_flag=""
       AVX512_flags=""
       FMA_flag=""
       SSE4_flag=""
-      config_flags="--disable-avx --disable-avx2 --disable-avx512 --disable-sse --disable-sse-assembly"
+      config_flags="--disable-avx-kernels --disable-avx2-kernels --disable-avx512-kernels --disable-sse-kernels --disable-sse-assembly-kernels"
       if [ "${TARGET_CPU}" = "native" ]; then
         if [ -f /proc/cpuinfo ] && [ "${OPENBLAS_ARCH}" = "x86_64" ]; then
           has_AVX=$(grep '\bavx\b' /proc/cpuinfo 1> /dev/null && echo 'yes' || echo 'no')
@@ -87,47 +82,55 @@ case "$with_elpa" in
           grep '\bavx512cd\b' /proc/cpuinfo 1> /dev/null && AVX512_flags+=" -mavx512cd"
           grep '\bavx512bw\b' /proc/cpuinfo 1> /dev/null && AVX512_flags+=" -mavx512bw"
           grep '\bavx512vl\b' /proc/cpuinfo 1> /dev/null && AVX512_flags+=" -mavx512vl"
-          config_flags="--enable-avx=${has_AVX} --enable-avx2=${has_AVX2} --enable-avx512=${has_AVX512}"
+          config_flags="--enable-avx-kernels=${has_AVX} --enable-avx2-kernels=${has_AVX2} --enable-avx512-kernels=${has_AVX512}"
         fi
       fi
       for TARGET in "cpu" "nvidia"; do
         [ "$TARGET" = "nvidia" ] && [ "$ENABLE_CUDA" != "__TRUE__" ] && continue
         echo "Installing from scratch into ${pkg_install_dir}/${TARGET}"
 
+        gnu_ldflags="-Wl,--allow-multiple-definition -Wl,--enable-new-dtags"
+        if [[ "$(uname)" == "Darwin" ]]; then
+          gnu_ldflags=""
+          config_flags="${config_flags} --enable-affinity-checking=no"
+        fi
+
         mkdir -p "build_${TARGET}"
         cd "build_${TARGET}"
         ../configure --prefix="${pkg_install_dir}/${TARGET}/" \
           --libdir="${pkg_install_dir}/${TARGET}/lib" \
           --enable-openmp=${enable_openmp} \
-          --enable-shared=no \
+          --enable-shared=yes \
           --enable-static=yes \
           --disable-c-tests \
           --disable-cpp-tests \
           ${config_flags} \
-          --enable-nvidia-gpu=$([ "$TARGET" = "nvidia" ] && echo "yes" || echo "no") \
+          --enable-nvidia-gpu-kernels=$([ "$TARGET" = "nvidia" ] && echo "yes" || echo "no") \
           --with-cuda-path=${CUDA_PATH:-${CUDA_HOME:-/CUDA_HOME-notset}} \
           --with-NVIDIA-GPU-compute-capability=$([ "$TARGET" = "nvidia" ] && echo "sm_$ARCH_NUM" || echo "sm_35") \
+          --without-cusolver \
           CUDA_CFLAGS="-std=c++14 -allow-unsupported-compiler" \
           OMPI_MCA_plm_rsh_agent=/bin/false \
           FC=${MPIFC} \
           CC=${MPICC} \
           CXX=${MPICXX} \
           CPP="cpp -E" \
-          FCFLAGS="${FCFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} -ffree-line-length-none ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
+          FCFLAGS="${FCFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
           CFLAGS="${CFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
           CXXFLAGS="${CXXFLAGS} ${MATH_CFLAGS} ${SCALAPACK_CFLAGS} ${AVX_flag} ${FMA_flag} ${SSE4_flag} ${AVX512_flags} -fno-lto" \
-          LDFLAGS="-Wl,--allow-multiple-definition -Wl,--enable-new-dtags ${MATH_LDFLAGS} ${SCALAPACK_LDFLAGS} ${cray_ldflags}" \
+          LDFLAGS="${gnu_ldflags} ${MATH_LDFLAGS} ${SCALAPACK_LDFLAGS} ${cray_ldflags} -lstdc++" \
           LIBS="${SCALAPACK_LIBS} $(resolve_string "${MATH_LIBS}" "MPI")" \
-          > configure.log 2>&1 || tail -n ${LOG_LINES} configure.log
-        make -j $(get_nprocs) > make.log 2>&1 || tail -n ${LOG_LINES} make.log
-        make install > install.log 2>&1 || tail -n ${LOG_LINES} install.log
+          > configure.log 2>&1 || tail_excerpt configure.log
+        make -j $(get_nprocs) > make.log 2>&1 || tail_excerpt make.log
+        make install > install.log 2>&1 || tail_excerpt install.log
         cd ..
       done
       cd ..
       write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage5/$(basename ${SCRIPT_NAME})"
     fi
     [ "$enable_openmp" != "yes" ] && elpa_dir_openmp=""
-    ELPA_CFLAGS="-I'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/include/elpa${elpa_dir_openmp}-${elpa_ver}/modules' -I'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/include/elpa${elpa_dir_openmp}-${elpa_ver}/elpa'"
+    elpa_include="${pkg_install_dir}/IF_CUDA(nvidia|cpu)/include/elpa${elpa_dir_openmp}-${elpa_ver}"
+    ELPA_CFLAGS="-I'$elpa_include/modules' -I'$elpa_include/elpa'"
     ELPA_LDFLAGS="-L'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/lib' -Wl,-rpath,'${pkg_install_dir}/IF_CUDA(nvidia|cpu)/lib'"
     ;;
   __SYSTEM__)
@@ -167,22 +170,30 @@ case "$with_elpa" in
 esac
 if [ "$with_elpa" != "__DONTUSE__" ]; then
   ELPA_LIBS="-lelpa${elpa_dir_openmp}"
-  cat << EOF > "${BUILDDIR}/setup_elpa"
-prepend_path CPATH "$elpa_include"
-EOF
   if [ "$with_elpa" != "__SYSTEM__" ]; then
     cat << EOF >> "${BUILDDIR}/setup_elpa"
-prepend_path PATH "$pkg_install_dir/bin"
-prepend_path LD_LIBRARY_PATH "$pkg_install_dir/lib"
-prepend_path LD_RUN_PATH "$pkg_install_dir/lib"
-prepend_path LIBRARY_PATH "$pkg_install_dir/lib"
-prepend_path PKG_CONFIG_PATH "$pkg_install_dir/lib/pkgconfig"
-prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
-export ELPA_ROOT="$pkg_install_dir"
+prepend_path PATH "${pkg_install_dir}/cpu/bin"
+prepend_path LD_LIBRARY_PATH "${pkg_install_dir}/cpu/lib"
+prepend_path LD_RUN_PATH "${pkg_install_dir}/cpu/lib"
+prepend_path LIBRARY_PATH "${pkg_install_dir}/cpu/lib"
+prepend_path PKG_CONFIG_PATH "${pkg_install_dir}/cpu/lib/pkgconfig"
+prepend_path CMAKE_PREFIX_PATH "${pkg_install_dir}/cpu"
+prepend_path CPATH "${elpa_include}"
 EOF
+    if [ -d ${pkg_install_dir}/nvidia ]; then
+      cat << EOF >> "${BUILDDIR}/setup_elpa"
+prepend_path PATH "${pkg_install_dir}/nvidia/bin"
+prepend_path LD_LIBRARY_PATH "${pkg_install_dir}/nvidia/lib"
+prepend_path LD_RUN_PATH "${pkg_install_dir}/nvidia/lib"
+prepend_path LIBRARY_PATH "${pkg_install_dir}/nvidia/lib"
+prepend_path PKG_CONFIG_PATH "${pkg_install_dir}/nvidia/lib/pkgconfig"
+prepend_path CMAKE_PREFIX_PATH "${pkg_install_dir}/nvidia"
+EOF
+    fi
   fi
-  cat "${BUILDDIR}/setup_elpa" >> $SETUPFILE
   cat << EOF >> "${BUILDDIR}/setup_elpa"
+export ELPA_VER="${elpa_ver}"
+export ELPA_ROOT="${pkg_install_dir}"
 export ELPA_CFLAGS="${ELPA_CFLAGS}"
 export ELPA_LDFLAGS="${ELPA_LDFLAGS}"
 export ELPA_LIBS="${ELPA_LIBS}"
@@ -190,10 +201,8 @@ export CP_DFLAGS="\${CP_DFLAGS} IF_MPI(-D__ELPA IF_CUDA(-D__ELPA_NVIDIA_GPU|)|)"
 export CP_CFLAGS="\${CP_CFLAGS} IF_MPI(${ELPA_CFLAGS}|)"
 export CP_LDFLAGS="\${CP_LDFLAGS} IF_MPI(${ELPA_LDFLAGS}|)"
 export CP_LIBS="IF_MPI(${ELPA_LIBS}|) \${CP_LIBS}"
-export ELPA_ROOT="$pkg_install_dir"
-export ELPA_VERSION="${elpa_ver}"
 EOF
-
+  filter_setup "${BUILDDIR}/setup_elpa" "${SETUPFILE}"
 fi
 
 load "${BUILDDIR}/setup_elpa"

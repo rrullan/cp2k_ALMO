@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,7 +18,7 @@ MODULE qs_energy_utils
                                               atprop_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_control_utils,                ONLY: read_ddapc_section
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
                                               dbcsr_create,&
                                               dbcsr_p_type,&
                                               dbcsr_release,&
@@ -40,6 +40,7 @@ MODULE qs_energy_utils
                                               pw_scale
    USE pw_pool_types,                   ONLY: pw_pool_type
    USE pw_types,                        ONLY: pw_r3d_rs_type
+   USE qs_core_matrices,                ONLY: core_matrices
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
@@ -61,6 +62,7 @@ MODULE qs_energy_utils
    USE qs_tddfpt2_methods,              ONLY: tddfpt
    USE qs_vxc,                          ONLY: qs_xc_density
    USE qs_vxc_atom,                     ONLY: calculate_vxc_atom
+   USE rixs_methods,                    ONLY: rixs
    USE tip_scan_methods,                ONLY: tip_scanning
    USE xas_methods,                     ONLY: xas
    USE xas_tdp_methods,                 ONLY: xas_tdp
@@ -82,7 +84,8 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Refactoring of qs_energies_scf. Moves computation of properties
-!>        into separate subroutine
+!>        into separate subroutine. Calculates energy and if calc_forces then the response vector
+!>        and some contributions to the force
 !> \param qs_env ...
 !> \param calc_forces ...
 !> \par History
@@ -179,6 +182,7 @@ CONTAINS
       END IF
 
       !Properties
+
       IF (dft_control%do_xas_calculation) THEN
          CALL xas(qs_env, dft_control)
       END IF
@@ -188,13 +192,18 @@ CONTAINS
       END IF
 
       ! Compute Linear Response properties as post-scf
+      ! Initialization of TDDFPT calculation
       IF (.NOT. qs_env%linres_run) THEN
          CALL linres_calculation_low(qs_env)
       END IF
 
+      ! Calculates the energy, response vector and some contributions to the force
       IF (dft_control%tddfpt2_control%enabled) THEN
          CALL tddfpt(qs_env, calc_forces)
       END IF
+
+      ! stand-alone RIXS, does not depend on previous xas_tdp and/or tddfpt2 calculations
+      IF (qs_env%do_rixs) CALL rixs(qs_env)
 
       ! post-SCF bandstructure calculation from higher level methods
       NULLIFY (post_scf_bands_section)
@@ -227,25 +236,55 @@ CONTAINS
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
-      INTEGER                                            :: ispin
+      INTEGER                                            :: ispin, natom, nspin
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: atcore
       TYPE(atprop_type), POINTER                         :: atprop
+      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:), &
+         TARGET                                          :: core_mat
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_h, matrix_ks, rho_ao
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: math, matp
+      TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(qs_rho_type), POINTER                         :: rho
 
-      NULLIFY (atprop, matrix_h, matrix_ks, rho, rho_ao)
-      CALL get_qs_env(qs_env=qs_env, matrix_ks=matrix_ks, matrix_h=matrix_h, &
-                      rho=rho, atprop=atprop)
-      CALL qs_rho_get(rho, rho_ao=rho_ao)
-
+      CALL get_qs_env(qs_env=qs_env, atprop=atprop)
       IF (atprop%energy) THEN
+         CALL get_qs_env(qs_env=qs_env, matrix_ks=matrix_ks, matrix_h=matrix_h, rho=rho)
+         CALL qs_rho_get(rho, rho_ao=rho_ao)
          ! E = 0.5*Tr(H*P+F*P)
          atprop%atener = 0._dp
-         DO ispin = 1, SIZE(rho_ao)
+         nspin = SIZE(rho_ao)
+         DO ispin = 1, nspin
             CALL atom_trace(matrix_h(1)%matrix, rho_ao(ispin)%matrix, &
                             0.5_dp, atprop%atener)
             CALL atom_trace(matrix_ks(ispin)%matrix, rho_ao(ispin)%matrix, &
                             0.5_dp, atprop%atener)
          END DO
+         !
+         CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
+         IF (.NOT. dft_control%qs_control%semi_empirical .AND. &
+             .NOT. dft_control%qs_control%xtb .AND. &
+             .NOT. dft_control%qs_control%dftb) THEN
+            CALL get_qs_env(qs_env=qs_env, natom=natom)
+            ALLOCATE (atcore(natom))
+            atcore = 0.0_dp
+            ALLOCATE (core_mat(1))
+            ALLOCATE (core_mat(1)%matrix)
+            CALL dbcsr_create(core_mat(1)%matrix, template=matrix_h(1)%matrix)
+            CALL dbcsr_copy(core_mat(1)%matrix, matrix_h(1)%matrix)
+            CALL dbcsr_set(core_mat(1)%matrix, 0.0_dp)
+            math(1:1, 1:1) => core_mat(1:1)
+            matp(1:nspin, 1:1) => rho_ao(1:nspin)
+            CALL core_matrices(qs_env, math, matp, .FALSE., 0, atcore=atcore)
+            atprop%atener = atprop%atener + 0.5_dp*atcore
+            DO ispin = 1, nspin
+               CALL atom_trace(core_mat(1)%matrix, rho_ao(ispin)%matrix, &
+                               -0.5_dp, atprop%atener)
+            END DO
+            DEALLOCATE (atcore)
+            CALL dbcsr_release(core_mat(1)%matrix)
+            DEALLOCATE (core_mat(1)%matrix)
+            DEALLOCATE (core_mat)
+         END IF
       END IF
 
    END SUBROUTINE qs_energies_mulliken

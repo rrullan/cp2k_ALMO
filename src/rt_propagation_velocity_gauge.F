@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -21,10 +21,7 @@ MODULE rt_propagation_velocity_gauge
                                               pbc
    USE core_ppnl,                       ONLY: build_core_ppnl
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
-   USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
-                                              dbcsr_deallocate_matrix_set
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
                                               dbcsr_create,&
                                               dbcsr_get_block_p,&
                                               dbcsr_init_p,&
@@ -32,6 +29,9 @@ MODULE rt_propagation_velocity_gauge
                                               dbcsr_set,&
                                               dbcsr_type_antisymmetric,&
                                               dbcsr_type_symmetric
+   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
+   USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
+                                              dbcsr_deallocate_matrix_set
    USE efield_utils,                    ONLY: make_field
    USE external_potential_types,        ONLY: gth_potential_p_type,&
                                               gth_potential_type,&
@@ -267,6 +267,7 @@ CONTAINS
       REAL(kind=dp)                                      :: field(3)
 
       CALL make_field(dft_control, field, qs_env%sim_step, qs_env%sim_time)
+      dft_control%rtp_control%field = field
       dft_control%rtp_control%vec_pot = dft_control%rtp_control%vec_pot - field*qs_env%rtp%dt
       ! Update the vec_pot_initial value for RTP restart:
       dft_control%efield_fields(1)%efield%vec_pot_initial = dft_control%rtp_control%vec_pot
@@ -384,7 +385,7 @@ CONTAINS
 !$OMP PRIVATE (real_block, imag_block, acint_cos, achint_cos, bcint_cos, bchint_cos, acint_sin,&
 !$OMP          achint_sin, bcint_sin, bchint_sin, slot, ikind, jkind, iatom, jatom, cell_b, rab, irow, icol,&
 !$OMP          found, kkind, iac, ibc, alist_cos_ac, alist_cos_bc, alist_sin_ac, alist_sin_bc, kac, kbc, &
-!$OMP          na, np, nb, iatom8, hash)
+!$OMP          na, np, nb, iatom8, hash, lock_num)
 
 !$OMP SINGLE
 !$       ALLOCATE (locks(nlock))

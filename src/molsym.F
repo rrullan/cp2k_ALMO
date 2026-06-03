@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -92,23 +92,26 @@ MODULE molsym
 !> \author jgh
 ! **************************************************************************************************
    TYPE molsym_type
-      CHARACTER(LEN=4)                            :: point_group_symbol
-      INTEGER                                    :: point_group_order
-      INTEGER                                    :: ncn, ndod, ngroup, nico, nlin, nsig, nsn, ntet
-      LOGICAL                                    :: cubic, dgroup, igroup, invers, linear, maxis, &
-                                                    ogroup, sgroup, sigmad, sigmah, sigmav, tgroup
-      REAL(KIND=dp)                              :: eps_geo
-      REAL(KIND=dp), DIMENSION(3)                :: center_of_mass, tenval
-      REAL(KIND=dp), DIMENSION(3)                :: x_axis, y_axis, z_axis
-      REAL(KIND=dp), DIMENSION(:), POINTER       :: ain, aw
-      REAL(KIND=dp), DIMENSION(3, 3)              :: inptostd, rotmat, tenmat, tenvec
-      REAL(KIND=dp), DIMENSION(3, maxsig)         :: sig
-      REAL(KIND=dp), DIMENSION(3, maxsec, 2:maxcn) :: sec
-      REAL(KIND=dp), DIMENSION(3, maxses, 2:maxsn) :: ses
-      INTEGER, DIMENSION(maxcn)                  :: nsec
-      INTEGER, DIMENSION(maxsn)                  :: nses
-      INTEGER, DIMENSION(:), POINTER             :: group_of, llequatom, nequatom, &
-                                                    symequ_list, ulequatom
+      CHARACTER(LEN=4)                            :: point_group_symbol = ""
+      INTEGER                                    :: point_group_order = -1
+      INTEGER                                    :: ncn = -1, ndod = -1, ngroup = -1, nico = -1, &
+                                                    nlin = -1, nsig = -1, nsn = -1, ntet = -1
+      LOGICAL                                    :: cubic = .FALSE., dgroup = .FALSE., igroup = .FALSE., &
+                                                    invers = .FALSE., linear = .FALSE., maxis = .FALSE., &
+                                                    ogroup = .FALSE., sgroup = .FALSE., sigmad = .FALSE., &
+                                                    sigmah = .FALSE., sigmav = .FALSE., tgroup = .FALSE.
+      REAL(KIND=dp)                              :: eps_geo = 0.0_dp
+      REAL(KIND=dp), DIMENSION(3)                :: center_of_mass = 0.0_dp, tenval = 0.0_dp
+      REAL(KIND=dp), DIMENSION(3)                :: x_axis = 0.0_dp, y_axis = 0.0_dp, z_axis = 0.0_dp
+      REAL(KIND=dp), DIMENSION(:), POINTER       :: ain => NULL(), aw => NULL()
+      REAL(KIND=dp), DIMENSION(3, 3)              :: inptostd = 0.0_dp, rotmat = 0.0_dp, tenmat = 0.0_dp, tenvec = 0.0_dp
+      REAL(KIND=dp), DIMENSION(3, maxsig)         :: sig = 0.0_dp
+      REAL(KIND=dp), DIMENSION(3, maxsec, 2:maxcn) :: sec = 0.0_dp
+      REAL(KIND=dp), DIMENSION(3, maxses, 2:maxsn) :: ses = 0.0_dp
+      INTEGER, DIMENSION(maxcn)                  :: nsec = -1
+      INTEGER, DIMENSION(maxsn)                  :: nses = -1
+      INTEGER, DIMENSION(:), POINTER             :: group_of => NULL(), llequatom => NULL(), nequatom => NULL(), &
+                                                    symequ_list => NULL(), ulequatom => NULL()
    END TYPE molsym_type
 
 ! **************************************************************************************************
@@ -513,7 +516,7 @@ CONTAINS
          END DO
 
          ! Exit loop, if all atoms are in the list
-         IF (sym%ulequatom(sym%ngroup) == natoms) EXIT
+         IF (sym%ulequatom(sym%ngroup) == natoms) EXIT loop
 
          ! Search for the next atom which is not in the list yet
          DO jatom = 2, natoms
@@ -945,9 +948,9 @@ CONTAINS
       INTEGER                                            :: i, iatom, natoms
 
       ! Define the Cartesian axis vectors
-      sym%x_axis = (/1.0_dp, 0.0_dp, 0.0_dp/)
-      sym%y_axis = (/0.0_dp, 1.0_dp, 0.0_dp/)
-      sym%z_axis = (/0.0_dp, 0.0_dp, 1.0_dp/)
+      sym%x_axis = [1.0_dp, 0.0_dp, 0.0_dp]
+      sym%y_axis = [0.0_dp, 1.0_dp, 0.0_dp]
+      sym%z_axis = [0.0_dp, 0.0_dp, 1.0_dp]
 
       ! Initialize lists for symmetry elements
       sym%sec(:, :, :) = 0.0_dp
@@ -1142,10 +1145,10 @@ CONTAINS
          ! 0 < tenval(1) < tenval(2) = tenval(3)
          ! special case: 0 = tenval(1) < tenval(2) = tenval(3)
          IF (sym%tenval(1) < eps_tenval) sym%linear = .TRUE.
-         CALL tracar(sym, coord, (/3, 1, 2/))
+         CALL tracar(sym, coord, [3, 1, 2])
       ELSE
          ! 0 < tenval(1) = tenval(2) < tenval(3) or 0 < tenval(1) < tenval(2) < tenval(3)
-         CALL tracar(sym, coord, (/1, 2, 3/))
+         CALL tracar(sym, coord, [1, 2, 3])
       END IF
 
       ! Continue with the new coordinate axes
@@ -1754,7 +1757,7 @@ CONTAINS
 
       d = SQRT(SUM((a - b)**2))
 
-   END FUNCTION
+   END FUNCTION dist
 ! **************************************************************************************************
 !> \brief   Write atomic coordinates to output unit iw.
 !> \param coord ...

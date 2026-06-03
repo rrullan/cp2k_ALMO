@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -37,9 +37,8 @@ MODULE atom_grb
                                               section_vals_val_get
    USE kinds,                           ONLY: default_string_length,&
                                               dp
-   USE lapack,                          ONLY: lapack_ssygv
    USE mathconstants,                   ONLY: dfac,&
-                                              pi
+                                              rootpi
    USE orbital_pointers,                ONLY: deallocate_orbital_pointers,&
                                               init_orbital_pointers
    USE orbital_transformation_matrices, ONLY: deallocate_spherical_harmonics,&
@@ -302,10 +301,10 @@ CONTAINS
          m = atom%basis%nbas(l)
          DO i = 1, n
             DO j = 1, i - 1
-               o = DOT_PRODUCT(rbasis(1:m, j, l), RESHAPE(MATMUL(ovlp(1:m, 1:m, l), rbasis(1:m, i:i, l)), (/m/)))
+               o = DOT_PRODUCT(rbasis(1:m, j, l), RESHAPE(MATMUL(ovlp(1:m, 1:m, l), rbasis(1:m, i:i, l)), [m]))
                rbasis(1:m, i, l) = rbasis(1:m, i, l) - o*rbasis(1:m, j, l)
             END DO
-            o = DOT_PRODUCT(rbasis(1:m, i, l), RESHAPE(MATMUL(ovlp(1:m, 1:m, l), rbasis(1:m, i:i, l)), (/m/)))
+            o = DOT_PRODUCT(rbasis(1:m, i, l), RESHAPE(MATMUL(ovlp(1:m, 1:m, l), rbasis(1:m, i:i, l)), [m]))
             rbasis(1:m, i, l) = rbasis(1:m, i, l)/SQRT(o)
          END DO
 
@@ -322,7 +321,7 @@ CONTAINS
 
          ! Quickstep normalization
          expzet = 0.25_dp*REAL(2*l + 3, dp)
-         prefac = SQRT(SQRT(pi)/2._dp**(l + 2)*dfac(2*l + 1))
+         prefac = SQRT(rootpi/2._dp**(l + 2)*dfac(2*l + 1))
          DO i = 1, m
             zeta = (2._dp*atom%basis%am(i, l))**expzet
             qbasis(i, 1:n, l) = rbasis(i, 1:n, l)*prefac/zeta
@@ -630,7 +629,7 @@ CONTAINS
       ! Quickstep normalization polarization basis
       DO l = 0, 7
          expzet = 0.25_dp*REAL(2*l + 3, dp)
-         prefac = SQRT(SQRT(pi)/2._dp**(l + 2)*dfac(2*l + 1))
+         prefac = SQRT(rootpi/2._dp**(l + 2)*dfac(2*l + 1))
          DO i = 1, num_pol
             zeta = (2._dp*alp(i))**expzet
             pbasis(i, 1:num_pol, l) = pbasis(i, 1:num_pol, l)*prefac/zeta
@@ -639,7 +638,7 @@ CONTAINS
       ! Quickstep normalization extended basis
       DO l = 0, lmat
          expzet = 0.25_dp*REAL(2*l + 3, dp)
-         prefac = SQRT(SQRT(pi)/2._dp**(l + 2)*dfac(2*l + 1))
+         prefac = SQRT(rootpi/2._dp**(l + 2)*dfac(2*l + 1))
          DO i = 1, next_prim(l)
             zeta = (2._dp*ale(i))**expzet
             ebasis(i, 1:next_bas(l), l) = ebasis(i, 1:next_bas(l), l)*prefac/zeta
@@ -735,7 +734,7 @@ CONTAINS
 
       IF (PRESENT(header)) THEN
          DO i = 1, SIZE(header, 1)
-            IF (header(i) .NE. "") THEN
+            IF (header(i) /= "") THEN
                WRITE (iunit, "(A)") TRIM(header(i))
             END IF
          END DO
@@ -792,8 +791,7 @@ CONTAINS
       INTEGER, DIMENSION(0:), INTENT(in)                 :: np, nb
 
       INTEGER                                            :: i, l, lmax
-      CHARACTER(len=1), DIMENSION(0:7), PARAMETER :: &
-         lq = (/"s", "p", "d", "f", "g", "h", "i", "k"/)
+      CHARACTER(len=1), DIMENSION(0:7), PARAMETER :: lq = ["s", "p", "d", "f", "g", "h", "i", "k"]
 
       label = ""
       lmax = MIN(UBOUND(np, 1), UBOUND(nb, 1), 7)
@@ -1236,7 +1234,7 @@ CONTAINS
       ! solve
       lwork = 100*n
       ALLOCATE (w(n), work(lwork))
-      CALL lapack_ssygv(1, "V", "U", n, hmat, n, smat, n, w, work, lwork, info)
+      CALL dsygv(1, "V", "U", n, hmat, n, smat, n, w, work, lwork, info)
       CPASSERT(info == 0)
       orb(1:n, 1:n) = hmat(1:n, 1:n)
       ener(1:n) = w(1:n)

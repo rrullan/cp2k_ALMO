@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,6 +23,9 @@ MODULE qs_environment_types
                                               cell_type
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_distribution_type,&
+                                              dbcsr_p_type,&
+                                              dbcsr_release_p
    USE cp_ddapc_types,                  ONLY: cp_ddapc_ewald_release,&
                                               cp_ddapc_ewald_type,&
                                               cp_ddapc_release,&
@@ -31,9 +34,6 @@ MODULE qs_environment_types
                                               cp_fm_type
    USE cp_result_types,                 ONLY: cp_result_type
    USE cp_subsys_types,                 ONLY: cp_subsys_type
-   USE dbcsr_api,                       ONLY: dbcsr_distribution_type,&
-                                              dbcsr_p_type,&
-                                              dbcsr_release_p
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type,&
@@ -90,6 +90,7 @@ MODULE qs_environment_types
                                               release_active_space_type
    USE qs_charges_types,                ONLY: qs_charges_release,&
                                               qs_charges_type
+   USE qs_cneo_types,                   ONLY: rhoz_cneo_type
    USE qs_dftb_types,                   ONLY: qs_dftb_pairpot_release,&
                                               qs_dftb_pairpot_type
    USE qs_dispersion_types,             ONLY: qs_dispersion_release,&
@@ -98,6 +99,8 @@ MODULE qs_environment_types
    USE qs_force_types,                  ONLY: qs_force_type
    USE qs_gcp_types,                    ONLY: qs_gcp_release,&
                                               qs_gcp_type
+   USE qs_harris_types,                 ONLY: harris_env_release,&
+                                              harris_type
    USE qs_kind_types,                   ONLY: qs_kind_type
    USE qs_ks_qmmm_types,                ONLY: qs_ks_qmmm_env_type,&
                                               qs_ks_qmmm_release
@@ -152,6 +155,8 @@ MODULE qs_environment_types
    USE semi_empirical_types,            ONLY: se_taper_release,&
                                               se_taper_type
    USE task_list_types,                 ONLY: task_list_type
+   USE tblite_types,                    ONLY: deallocate_tblite_type,&
+                                              tblite_type
    USE transport_env_types,             ONLY: transport_env_release,&
                                               transport_env_type
    USE virial_types,                    ONLY: virial_type
@@ -166,11 +171,11 @@ MODULE qs_environment_types
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_environment_types'
 
-! *** Public data types ***
+   ! Public data types
 
    PUBLIC :: qs_environment_type
 
-! *** Public subroutines ***
+   ! Public subroutines
 
    PUBLIC :: get_qs_env, &
              qs_env_create, &
@@ -213,101 +218,110 @@ MODULE qs_environment_types
 ! **************************************************************************************************
 
    TYPE qs_environment_type
-      LOGICAL :: qmmm, qmmm_periodic
-      LOGICAL :: requires_mo_derivs
-      LOGICAL :: requires_matrix_vxc
-      LOGICAL :: has_unit_metric
-      LOGICAL :: run_rtp
-      LOGICAL :: linres_run
-      LOGICAL :: calc_image_preconditioner
-      LOGICAL :: do_transport
-      LOGICAL :: single_point_run
-      LOGICAL :: given_embed_pot
-      LOGICAL :: energy_correction
-      REAL(KIND=dp)                                         :: sim_time
-      REAL(KIND=dp) :: start_time, target_time
-      REAL(KIND=dp), DIMENSION(:, :), POINTER               :: image_matrix
-      REAL(KIND=dp), DIMENSION(:), POINTER                  :: image_coeff
-      INTEGER, DIMENSION(:), POINTER                        :: ipiv
-      INTEGER                                               :: sim_step
-      TYPE(ls_scf_env_type), POINTER                        :: ls_scf_env
-      TYPE(almo_scf_env_type), POINTER                      :: almo_scf_env
-      TYPE(transport_env_type), POINTER                     :: transport_env
-      TYPE(cell_type), POINTER                              :: super_cell
-      TYPE(mo_set_type), DIMENSION(:), POINTER            :: mos
-      TYPE(cp_fm_type), DIMENSION(:), POINTER             :: mo_loc_history
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER             :: mo_derivs
-      TYPE(scf_control_type), POINTER                       :: scf_control
-      TYPE(rel_control_type), POINTER                       :: rel_control
+      LOGICAL :: qmmm = .FALSE., qmmm_periodic = .FALSE.
+      LOGICAL :: mimic = .FALSE.
+      LOGICAL :: requires_mo_derivs = .FALSE.
+      LOGICAL :: requires_matrix_vxc = .FALSE.
+      LOGICAL :: has_unit_metric = .FALSE.
+      LOGICAL :: run_rtp = .FALSE.
+      LOGICAL :: linres_run = .FALSE.
+      LOGICAL :: calc_image_preconditioner = .FALSE.
+      LOGICAL :: do_transport = .FALSE.
+      LOGICAL :: single_point_run = .FALSE.
+      LOGICAL :: given_embed_pot = .FALSE.
+      LOGICAL :: energy_correction = .FALSE.
+      LOGICAL :: harris_method = .FALSE.
+      LOGICAL :: do_rixs = .FALSE.
+      REAL(KIND=dp)                                         :: sim_time = -1.0_dp
+      REAL(KIND=dp) :: start_time = -1.0_dp, target_time = -1.0_dp
+      REAL(KIND=dp), DIMENSION(:, :), POINTER               :: image_matrix => NULL()
+      REAL(KIND=dp), DIMENSION(:), POINTER                  :: image_coeff => NULL()
+      INTEGER, DIMENSION(:), POINTER                        :: ipiv => NULL()
+      INTEGER                                               :: sim_step = -1
+      TYPE(ls_scf_env_type), POINTER                        :: ls_scf_env => NULL()
+      TYPE(almo_scf_env_type), POINTER                      :: almo_scf_env => NULL()
+      TYPE(transport_env_type), POINTER                     :: transport_env => NULL()
+      TYPE(cell_type), POINTER                              :: super_cell => NULL()
+      TYPE(mo_set_type), DIMENSION(:), POINTER              :: mos => NULL()
+      TYPE(cp_fm_type), DIMENSION(:), POINTER               :: mo_loc_history => NULL()
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER             :: mo_derivs => NULL()
+      TYPE(scf_control_type), POINTER                       :: scf_control => NULL()
+      TYPE(rel_control_type), POINTER                       :: rel_control => NULL()
       ! ZMP adding variables
-      TYPE(qs_rho_type), POINTER                            :: rho_external
-      TYPE(pw_r3d_rs_type), POINTER                              :: external_vxc
-      TYPE(pw_r3d_rs_type), POINTER                              :: mask
-      TYPE(qs_charges_type), POINTER                        :: qs_charges
-      TYPE(qs_ks_env_type), POINTER                         :: ks_env
-      TYPE(qs_ks_qmmm_env_type), POINTER                    :: ks_qmmm_env
-      TYPE(qmmm_env_qm_type), POINTER                       :: qmmm_env_qm
-      TYPE(qs_wf_history_type), POINTER                     :: wf_history
-      TYPE(qs_scf_env_type), POINTER                        :: scf_env
-      TYPE(qs_matrix_pools_type), POINTER                   :: mpools
-      TYPE(oce_matrix_type), POINTER                        :: oce
-      TYPE(local_rho_type), POINTER                         :: local_rho_set
-      TYPE(hartree_local_type), POINTER                     :: hartree_local
-      TYPE(section_vals_type), POINTER                      :: input
-      TYPE(linres_control_type), POINTER                    :: linres_control
-      TYPE(xas_environment_type), POINTER                   :: xas_env
-      TYPE(cp_ddapc_type), POINTER                          :: cp_ddapc_env
-      TYPE(cp_ddapc_ewald_type), POINTER                    :: cp_ddapc_ewald
-      REAL(KIND=dp), DIMENSION(:, :), POINTER               :: outer_scf_history
-      INTEGER                                               :: outer_scf_ihistory
-      REAL(KIND=dp), DIMENSION(:, :), POINTER               :: gradient_history, &
-                                                               variable_history
-      TYPE(hfx_type), DIMENSION(:, :), POINTER              :: x_data
-      TYPE(et_coupling_type), POINTER                       :: et_coupling
-      TYPE(qs_dftb_pairpot_type), DIMENSION(:, :), POINTER  :: dftb_potential
-      TYPE(admm_type), POINTER                              :: admm_env
-      TYPE(active_space_type), POINTER                      :: active_space
+      TYPE(qs_rho_type), POINTER                            :: rho_external => NULL()
+      TYPE(pw_r3d_rs_type), POINTER                         :: external_vxc => NULL()
+      TYPE(pw_r3d_rs_type), POINTER                         :: mask => NULL()
+      TYPE(qs_charges_type), POINTER                        :: qs_charges => NULL()
+      TYPE(qs_ks_env_type), POINTER                         :: ks_env => NULL()
+      TYPE(qs_ks_qmmm_env_type), POINTER                    :: ks_qmmm_env => NULL()
+      TYPE(qmmm_env_qm_type), POINTER                       :: qmmm_env_qm => NULL()
+      TYPE(qs_wf_history_type), POINTER                     :: wf_history => NULL()
+      TYPE(qs_scf_env_type), POINTER                        :: scf_env => NULL()
+      TYPE(qs_matrix_pools_type), POINTER                   :: mpools => NULL()
+      TYPE(oce_matrix_type), POINTER                        :: oce => NULL()
+      TYPE(local_rho_type), POINTER                         :: local_rho_set => NULL()
+      TYPE(hartree_local_type), POINTER                     :: hartree_local => NULL()
+      TYPE(section_vals_type), POINTER                      :: input => NULL()
+      TYPE(linres_control_type), POINTER                    :: linres_control => NULL()
+      TYPE(xas_environment_type), POINTER                   :: xas_env => NULL()
+      TYPE(cp_ddapc_type), POINTER                          :: cp_ddapc_env => NULL()
+      TYPE(cp_ddapc_ewald_type), POINTER                    :: cp_ddapc_ewald => NULL()
+      REAL(KIND=dp), DIMENSION(:, :), POINTER               :: outer_scf_history => NULL()
+      INTEGER                                               :: outer_scf_ihistory = -1
+      REAL(KIND=dp), DIMENSION(:, :), POINTER               :: gradient_history => NULL(), &
+                                                               variable_history => NULL()
+      TYPE(hfx_type), DIMENSION(:, :), POINTER              :: x_data => NULL()
+      TYPE(et_coupling_type), POINTER                       :: et_coupling => NULL()
+      TYPE(qs_dftb_pairpot_type), DIMENSION(:, :), POINTER  :: dftb_potential => NULL()
+      TYPE(admm_type), POINTER                              :: admm_env => NULL()
+      TYPE(active_space_type), POINTER                      :: active_space => NULL()
       ! LRI
-      TYPE(lri_environment_type), POINTER                   :: lri_env
-      TYPE(lri_density_type), POINTER                       :: lri_density
+      TYPE(lri_environment_type), POINTER                   :: lri_env => NULL()
+      TYPE(lri_density_type), POINTER                       :: lri_density => NULL()
+      ! Harris model
+      TYPE(harris_type), POINTER                            :: harris_env => NULL()
       ! Energy correction
-      TYPE(energy_correction_type), POINTER                 :: ec_env
+      TYPE(energy_correction_type), POINTER                 :: ec_env => NULL()
       ! Excited States
-      LOGICAL                                               :: excited_state
-      TYPE(excited_energy_type), POINTER                    :: exstate_env
+      LOGICAL                                               :: excited_state = .FALSE.
+      TYPE(excited_energy_type), POINTER                    :: exstate_env => NULL()
       ! Empirical dispersion
-      TYPE(qs_dispersion_type), POINTER                     :: dispersion_env
+      TYPE(qs_dispersion_type), POINTER                     :: dispersion_env => NULL()
       ! Empirical geometrical BSSE correction
-      TYPE(qs_gcp_type), POINTER                            :: gcp_env
+      TYPE(qs_gcp_type), POINTER                            :: gcp_env => NULL()
       ! Semi-empirical and DFTB types
-      TYPE(ewald_environment_type), POINTER                 :: ewald_env
-      TYPE(ewald_pw_type), POINTER                          :: ewald_pw
+      TYPE(ewald_environment_type), POINTER                 :: ewald_env => NULL()
+      TYPE(ewald_pw_type), POINTER                          :: ewald_pw => NULL()
       ! Semi-empirical types
-      TYPE(se_taper_type), POINTER                          :: se_taper
-      TYPE(semi_empirical_si_type), POINTER                 :: se_store_int_env
-      TYPE(nddo_mpole_type), POINTER                        :: se_nddo_mpole
-      TYPE(fist_nonbond_env_type), POINTER                  :: se_nonbond_env
-      TYPE(rt_prop_type), POINTER                           :: rtp
-      TYPE(efield_berry_type), POINTER                      :: efield
+      TYPE(se_taper_type), POINTER                          :: se_taper => NULL()
+      TYPE(semi_empirical_si_type), POINTER                 :: se_store_int_env => NULL()
+      TYPE(nddo_mpole_type), POINTER                        :: se_nddo_mpole => NULL()
+      TYPE(fist_nonbond_env_type), POINTER                  :: se_nonbond_env => NULL()
+      TYPE(rt_prop_type), POINTER                           :: rtp => NULL()
+      TYPE(efield_berry_type), POINTER                      :: efield => NULL()
       ! a history for the broyden ot
-      REAL(KIND=dp)                                         :: broyden_adaptive_sigma
+      REAL(KIND=dp)                                         :: broyden_adaptive_sigma = -1.0_dp
       TYPE(mp2_type), POINTER                               :: mp2_env => NULL()
       TYPE(post_scf_bandstructure_type), POINTER                                :: bs_env => NULL()
-      TYPE(kg_environment_type), POINTER                    :: kg_env
+      TYPE(kg_environment_type), POINTER                    :: kg_env => NULL()
       TYPE(wannier_centres_type), POINTER, DIMENSION(:)     :: WannierCentres => NULL()
       TYPE(molecular_scf_guess_env_type), POINTER           :: molecular_scf_guess_env => NULL()
       ! Subsystem densities
-      TYPE(qs_rho_p_type), DIMENSION(:), POINTER            :: subsys_dens
+      TYPE(qs_rho_p_type), DIMENSION(:), POINTER            :: subsys_dens => NULL()
       ! Embedding potential
-      TYPE(pw_r3d_rs_type), POINTER                              :: embed_pot
-      TYPE(pw_r3d_rs_type), POINTER                              :: spin_embed_pot
+      TYPE(pw_r3d_rs_type), POINTER                         :: embed_pot => NULL()
+      TYPE(pw_r3d_rs_type), POINTER                         :: spin_embed_pot => NULL()
       ! Polarizability tensor
-      TYPE(polar_env_type), POINTER                         :: polar_env
+      TYPE(polar_env_type), POINTER                         :: polar_env => NULL()
+      ! EEQ charges
+      REAL(KIND=dp), DIMENSION(:), POINTER                  :: eeq => NULL()
       ! Resp charges
       REAL(KIND=dp), DIMENSION(:), POINTER                  :: rhs => NULL()
-      REAL(KIND=dp)                                         :: total_zeff_corr, surface_dipole_moment
-      LOGICAL                                               :: surface_dipole_switch_off
-      TYPE(mo_set_type), DIMENSION(:), POINTER            :: mos_last_converged
+      REAL(KIND=dp)                                         :: total_zeff_corr = -1.0_dp, surface_dipole_moment = -1.0_dp
+      LOGICAL                                               :: surface_dipole_switch_off = .FALSE.
+      TYPE(mo_set_type), DIMENSION(:), POINTER              :: mos_last_converged => NULL()
+      ! tblite
+      TYPE(tblite_type), POINTER                            :: tb_tblite => Null()
    END TYPE qs_environment_type
 
 CONTAINS
@@ -328,6 +342,7 @@ CONTAINS
 !> \param sab_all ...
 !> \param qmmm ...
 !> \param qmmm_periodic ...
+!> \param mimic ...
 !> \param sac_ae ...
 !> \param sac_ppl ...
 !> \param sac_lri ...
@@ -341,10 +356,12 @@ CONTAINS
 !> \param sab_tbe ...
 !> \param sab_core ...
 !> \param sab_xb ...
+!> \param sab_xtb_pp ...
 !> \param sab_xtb_nonbond ...
 !> \param sab_almo ...
 !> \param sab_kp ...
 !> \param sab_kp_nosym ...
+!> \param sab_cneo ...
 !> \param particle_set ...
 !> \param energy ...
 !> \param force ...
@@ -384,6 +401,7 @@ CONTAINS
 !> \param kinetic ...
 !> \param qs_charges ...
 !> \param vppl ...
+!> \param xcint_weights ...
 !> \param rho_core ...
 !> \param rho_nlcc ...
 !> \param rho_nlcc_g ...
@@ -407,9 +425,12 @@ CONTAINS
 !> \param rho0_atom_set ...
 !> \param rho0_mpole ...
 !> \param rhoz_set ...
+!> \param rhoz_cneo_set ...
 !> \param ecoul_1c ...
 !> \param rho0_s_rs ...
 !> \param rho0_s_gs ...
+!> \param rhoz_cneo_s_rs ...
+!> \param rhoz_cneo_s_gs ...
 !> \param do_kpoints ...
 !> \param has_unit_metric ...
 !> \param requires_mo_derivs ...
@@ -441,6 +462,7 @@ CONTAINS
 !> \param lri_density ...
 !> \param exstate_env ...
 !> \param ec_env ...
+!> \param harris_env ...
 !> \param dispersion_env ...
 !> \param gcp_env ...
 !> \param vee ...
@@ -468,37 +490,44 @@ CONTAINS
 !> \param spin_embed_pot ...
 !> \param polar_env ...
 !> \param mos_last_converged ... [SGh]
+!> \param eeq ...
 !> \param rhs ...
+!> \param do_rixs ...
+!> \param tb_tblite ...
 !> \date    23.01.2002
 !> \author  MK
 !> \version 1.0
 ! **************************************************************************************************
    SUBROUTINE get_qs_env(qs_env, atomic_kind_set, qs_kind_set, cell, super_cell, cell_ref, use_ref_cell, kpoints, &
-                         dft_control, mos, sab_orb, sab_all, qmmm, qmmm_periodic, sac_ae, sac_ppl, sac_lri, &
+                         dft_control, mos, sab_orb, sab_all, qmmm, qmmm_periodic, mimic, sac_ae, sac_ppl, sac_lri, &
                          sap_ppnl, sab_vdw, sab_scp, sap_oce, sab_lrc, sab_se, sab_xtbe, sab_tbe, sab_core, &
-                         sab_xb, sab_xtb_nonbond, sab_almo, sab_kp, sab_kp_nosym, particle_set, energy, force, &
+                         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_almo, &
+                         sab_kp, sab_kp_nosym, sab_cneo, particle_set, energy, force, &
                          matrix_h, matrix_h_im, matrix_ks, matrix_ks_im, matrix_vxc, run_rtp, rtp, &
                          matrix_h_kp, matrix_h_im_kp, matrix_ks_kp, matrix_ks_im_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, &
                          matrix_w_kp, matrix_s_RI_aux_kp, matrix_s, matrix_s_RI_aux, matrix_w, &
                          matrix_p_mp2, matrix_p_mp2_admm, rho, &
                          rho_xc, pw_env, ewald_env, ewald_pw, active_space, &
                          mpools, input, para_env, blacs_env, scf_control, rel_control, kinetic, qs_charges, &
-                         vppl, rho_core, rho_nlcc, rho_nlcc_g, ks_env, ks_qmmm_env, wf_history, scf_env, local_particles, &
+                         vppl, xcint_weights, rho_core, rho_nlcc, rho_nlcc_g, &
+                         ks_env, ks_qmmm_env, wf_history, scf_env, local_particles, &
                          local_molecules, distribution_2d, dbcsr_dist, molecule_kind_set, &
                          molecule_set, subsys, cp_subsys, oce, local_rho_set, rho_atom_set, &
-                         task_list, &
-                         task_list_soft, &
-                         rho0_atom_set, rho0_mpole, rhoz_set, ecoul_1c, &
-                         rho0_s_rs, rho0_s_gs, do_kpoints, has_unit_metric, requires_mo_derivs, mo_derivs, &
+                         task_list, task_list_soft, &
+                         rho0_atom_set, rho0_mpole, rhoz_set, rhoz_cneo_set, ecoul_1c, &
+                         rho0_s_rs, rho0_s_gs, rhoz_cneo_s_rs, rhoz_cneo_s_gs, &
+                         do_kpoints, has_unit_metric, requires_mo_derivs, mo_derivs, &
                          mo_loc_history, nkind, natom, nelectron_total, nelectron_spin, efield, &
                          neighbor_list_id, linres_control, xas_env, virial, cp_ddapc_env, cp_ddapc_ewald, &
                          outer_scf_history, outer_scf_ihistory, x_data, et_coupling, dftb_potential, results, &
                          se_taper, se_store_int_env, se_nddo_mpole, se_nonbond_env, admm_env, &
-                         lri_env, lri_density, exstate_env, ec_env, dispersion_env, gcp_env, vee, &
+                         lri_env, lri_density, exstate_env, ec_env, harris_env, dispersion_env, gcp_env, vee, &
                          rho_external, external_vxc, mask, mp2_env, bs_env, kg_env, &
                          WannierCentres, atprop, ls_scf_env, do_transport, transport_env, v_hartree_rspace, &
                          s_mstruct_changed, rho_changed, potential_changed, forces_up_to_date, mscfg_env, almo_scf_env, &
-                         gradient_history, variable_history, embed_pot, spin_embed_pot, polar_env, mos_last_converged, rhs)
+                         gradient_history, variable_history, embed_pot, spin_embed_pot, polar_env, mos_last_converged, &
+                         eeq, rhs, do_rixs, tb_tblite)
+
       TYPE(qs_environment_type), INTENT(IN)              :: qs_env
       TYPE(atomic_kind_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: atomic_kind_set
@@ -511,10 +540,10 @@ CONTAINS
       TYPE(mo_set_type), DIMENSION(:), OPTIONAL, POINTER :: mos
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          OPTIONAL, POINTER                               :: sab_orb, sab_all
-      LOGICAL, OPTIONAL                                  :: qmmm, qmmm_periodic
+      LOGICAL, OPTIONAL                                  :: qmmm, qmmm_periodic, mimic
       TYPE(neighbor_list_set_p_type), DIMENSION(:), OPTIONAL, POINTER :: sac_ae, sac_ppl, sac_lri, &
          sap_ppnl, sab_vdw, sab_scp, sap_oce, sab_lrc, sab_se, sab_xtbe, sab_tbe, sab_core, &
-         sab_xb, sab_xtb_nonbond, sab_almo, sab_kp, sab_kp_nosym
+         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_almo, sab_kp, sab_kp_nosym, sab_cneo
       TYPE(particle_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: particle_set
       TYPE(qs_energy_type), OPTIONAL, POINTER            :: energy
@@ -545,7 +574,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: kinetic
       TYPE(qs_charges_type), OPTIONAL, POINTER           :: qs_charges
-      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl, xcint_weights
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_core
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho_nlcc
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_nlcc_g
@@ -571,10 +600,14 @@ CONTAINS
          POINTER                                         :: rho0_atom_set
       TYPE(rho0_mpole_type), OPTIONAL, POINTER           :: rho0_mpole
       TYPE(rhoz_type), DIMENSION(:), OPTIONAL, POINTER   :: rhoz_set
+      TYPE(rhoz_cneo_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: rhoz_cneo_set
       TYPE(ecoul_1center_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: ecoul_1c
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho0_s_rs
       TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho0_s_gs
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rhoz_cneo_s_rs
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rhoz_cneo_s_gs
       LOGICAL, OPTIONAL                                  :: do_kpoints, has_unit_metric, &
                                                             requires_mo_derivs
       TYPE(dbcsr_p_type), DIMENSION(:), OPTIONAL, &
@@ -605,6 +638,7 @@ CONTAINS
       TYPE(lri_density_type), OPTIONAL, POINTER          :: lri_density
       TYPE(excited_energy_type), OPTIONAL, POINTER       :: exstate_env
       TYPE(energy_correction_type), OPTIONAL, POINTER    :: ec_env
+      TYPE(harris_type), OPTIONAL, POINTER               :: harris_env
       TYPE(qs_dispersion_type), OPTIONAL, POINTER        :: dispersion_env
       TYPE(qs_gcp_type), OPTIONAL, POINTER               :: gcp_env
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vee
@@ -630,7 +664,9 @@ CONTAINS
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: embed_pot, spin_embed_pot
       TYPE(polar_env_type), OPTIONAL, POINTER            :: polar_env
       TYPE(mo_set_type), DIMENSION(:), OPTIONAL, POINTER :: mos_last_converged
-      REAL(KIND=dp), DIMENSION(:), OPTIONAL, POINTER     :: rhs
+      REAL(KIND=dp), DIMENSION(:), OPTIONAL, POINTER     :: eeq, rhs
+      LOGICAL, OPTIONAL                                  :: do_rixs
+      TYPE(tblite_type), OPTIONAL, POINTER               :: tb_tblite
 
       TYPE(rho0_mpole_type), POINTER                     :: rho0_m
 
@@ -647,6 +683,7 @@ CONTAINS
       IF (PRESENT(super_cell)) super_cell => qs_env%super_cell
       IF (PRESENT(qmmm)) qmmm = qs_env%qmmm
       IF (PRESENT(qmmm_periodic)) qmmm_periodic = qs_env%qmmm_periodic
+      IF (PRESENT(mimic)) mimic = qs_env%mimic
       IF (PRESENT(mos)) mos => qs_env%mos
       IF (PRESENT(mos_last_converged)) mos_last_converged => qs_env%mos_last_converged
       IF (PRESENT(ewald_env)) ewald_env => qs_env%ewald_env
@@ -675,6 +712,7 @@ CONTAINS
       IF (PRESENT(se_nonbond_env)) se_nonbond_env => qs_env%se_nonbond_env
       IF (PRESENT(lri_env)) lri_env => qs_env%lri_env
       IF (PRESENT(lri_density)) lri_density => qs_env%lri_density
+      IF (PRESENT(harris_env)) harris_env => qs_env%harris_env
       IF (PRESENT(ec_env)) ec_env => qs_env%ec_env
       IF (PRESENT(exstate_env)) exstate_env => qs_env%exstate_env
       IF (PRESENT(dispersion_env)) dispersion_env => qs_env%dispersion_env
@@ -688,6 +726,7 @@ CONTAINS
       IF (PRESENT(mscfg_env)) mscfg_env => qs_env%molecular_scf_guess_env
       IF (PRESENT(active_space)) active_space => qs_env%active_space
       IF (PRESENT(admm_env)) admm_env => qs_env%admm_env
+      IF (PRESENT(do_rixs)) do_rixs = qs_env%do_rixs
 
       ! Embedding potential
       IF (PRESENT(embed_pot)) embed_pot => qs_env%embed_pot
@@ -695,6 +734,9 @@ CONTAINS
 
       ! Polarisability tensor
       IF (PRESENT(polar_env)) polar_env => qs_env%polar_env
+
+      ! EEQ charges
+      IF (PRESENT(eeq)) eeq => qs_env%eeq
 
       ! Resp charges
       IF (PRESENT(rhs)) rhs => qs_env%rhs
@@ -709,6 +751,8 @@ CONTAINS
          CALL get_local_rho(qs_env%local_rho_set, rho0_mpole=rho0_mpole)
       IF (PRESENT(rhoz_set)) &
          CALL get_local_rho(qs_env%local_rho_set, rhoz_set=rhoz_set)
+      IF (PRESENT(rhoz_cneo_set)) &
+         CALL get_local_rho(qs_env%local_rho_set, rhoz_cneo_set=rhoz_cneo_set)
       IF (PRESENT(ecoul_1c)) &
          CALL get_hartree_local(qs_env%hartree_local, ecoul_1c=ecoul_1c)
       IF (PRESENT(rho0_s_rs)) THEN
@@ -721,6 +765,18 @@ CONTAINS
          CALL get_local_rho(qs_env%local_rho_set, rho0_mpole=rho0_m)
          IF (ASSOCIATED(rho0_m)) THEN
             rho0_s_gs => rho0_m%rho0_s_gs
+         END IF
+      END IF
+      IF (PRESENT(rhoz_cneo_s_rs)) THEN
+         CALL get_local_rho(qs_env%local_rho_set, rho0_mpole=rho0_m)
+         IF (ASSOCIATED(rho0_m)) THEN
+            rhoz_cneo_s_rs => rho0_m%rhoz_cneo_s_rs
+         END IF
+      END IF
+      IF (PRESENT(rhoz_cneo_s_gs)) THEN
+         CALL get_local_rho(qs_env%local_rho_set, rho0_mpole=rho0_m)
+         IF (ASSOCIATED(rho0_m)) THEN
+            rhoz_cneo_s_gs => rho0_m%rhoz_cneo_s_gs
          END IF
       END IF
 
@@ -762,6 +818,7 @@ CONTAINS
                       matrix_s_RI_aux_kp=matrix_s_RI_aux_kp, &
                       rho=rho, &
                       rho_xc=rho_xc, &
+                      xcint_weights=xcint_weights, &
                       rho_core=rho_core, &
                       rho_nlcc=rho_nlcc, &
                       rho_nlcc_g=rho_nlcc_g, &
@@ -783,10 +840,12 @@ CONTAINS
                       sab_xtbe=sab_xtbe, &
                       sab_core=sab_core, &
                       sab_xb=sab_xb, &
+                      sab_xtb_pp=sab_xtb_pp, &
                       sab_xtb_nonbond=sab_xtb_nonbond, &
                       sab_almo=sab_almo, &
                       sab_kp=sab_kp, &
                       sab_kp_nosym=sab_kp_nosym, &
+                      sab_cneo=sab_cneo, &
                       task_list=task_list, &
                       task_list_soft=task_list_soft, &
                       kpoints=kpoints, &
@@ -818,6 +877,8 @@ CONTAINS
                       blacs_env=blacs_env, &
                       nelectron_total=nelectron_total, &
                       nelectron_spin=nelectron_spin)
+
+      IF (PRESENT(tb_tblite)) tb_tblite => qs_env%tb_tblite
 
    END SUBROUTINE get_qs_env
 
@@ -887,6 +948,7 @@ CONTAINS
       NULLIFY (qs_env%admm_env)
       NULLIFY (qs_env%efield)
       NULLIFY (qs_env%lri_env)
+      NULLIFY (qs_env%harris_env)
       NULLIFY (qs_env%ec_env)
       NULLIFY (qs_env%exstate_env)
       NULLIFY (qs_env%lri_density)
@@ -895,7 +957,6 @@ CONTAINS
       NULLIFY (qs_env%mp2_env)
       NULLIFY (qs_env%bs_env)
       NULLIFY (qs_env%kg_env)
-      NULLIFY (qs_env%ec_env)
       NULLIFY (qs_env%WannierCentres)
 
       qs_env%outer_scf_ihistory = 0
@@ -908,12 +969,14 @@ CONTAINS
       qs_env%single_point_run = .FALSE.
       qs_env%qmmm = .FALSE.
       qs_env%qmmm_periodic = .FALSE.
+      qs_env%mimic = .FALSE.
       qs_env%requires_mo_derivs = .FALSE.
       qs_env%requires_matrix_vxc = .FALSE.
       qs_env%has_unit_metric = .FALSE.
       qs_env%calc_image_preconditioner = .TRUE.
       qs_env%do_transport = .FALSE.
       qs_env%given_embed_pot = .FALSE.
+      qs_env%do_rixs = .FALSE.
       IF (PRESENT(globenv)) THEN
          qs_env%target_time = globenv%cp2k_target_time
          qs_env%start_time = globenv%cp2k_start_time
@@ -937,6 +1000,8 @@ CONTAINS
 
       IF (.NOT. ASSOCIATED(qs_env%molecular_scf_guess_env)) ALLOCATE (qs_env%molecular_scf_guess_env)
 
+      NULLIFY (qs_env%tb_tblite)
+
    END SUBROUTINE init_qs_env
 
 ! **************************************************************************************************
@@ -946,6 +1011,7 @@ CONTAINS
 !> \param mos ...
 !> \param qmmm ...
 !> \param qmmm_periodic ...
+!> \param mimic ...
 !> \param ewald_env ...
 !> \param ewald_pw ...
 !> \param mpools ...
@@ -975,6 +1041,7 @@ CONTAINS
 !> \param mo_derivs ...
 !> \param mo_loc_history ...
 !> \param efield ...
+!> \param rhoz_cneo_set ...
 !> \param linres_control ...
 !> \param xas_env ...
 !> \param cp_ddapc_env ...
@@ -997,6 +1064,7 @@ CONTAINS
 !> \param exstate_env ...
 !> \param ec_env ...
 !> \param dispersion_env ...
+!> \param harris_env ...
 !> \param gcp_env ...
 !> \param mp2_env ...
 !> \param bs_env ...
@@ -1011,32 +1079,35 @@ CONTAINS
 !> \param spin_embed_pot ...
 !> \param polar_env ...
 !> \param mos_last_converged ... [SGh]
+!> \param eeq ...
 !> \param rhs ...
+!> \param do_rixs ...
+!> \param tb_tblite ...
 !> \date    23.01.2002
 !> \author  MK
 !> \version 1.0
 ! **************************************************************************************************
    SUBROUTINE set_qs_env(qs_env, super_cell, &
-                         mos, qmmm, qmmm_periodic, &
+                         mos, qmmm, qmmm_periodic, mimic, &
                          ewald_env, ewald_pw, mpools, &
                          rho_external, external_vxc, mask, &
                          scf_control, rel_control, qs_charges, ks_env, &
                          ks_qmmm_env, wf_history, scf_env, active_space, &
                          input, oce, rho_atom_set, rho0_atom_set, rho0_mpole, run_rtp, rtp, &
                          rhoz_set, rhoz_tot, ecoul_1c, has_unit_metric, requires_mo_derivs, mo_derivs, &
-                         mo_loc_history, efield, &
+                         mo_loc_history, efield, rhoz_cneo_set, &
                          linres_control, xas_env, cp_ddapc_env, cp_ddapc_ewald, &
                          outer_scf_history, outer_scf_ihistory, x_data, et_coupling, dftb_potential, &
                          se_taper, se_store_int_env, se_nddo_mpole, se_nonbond_env, admm_env, ls_scf_env, &
                          do_transport, transport_env, lri_env, lri_density, exstate_env, ec_env, dispersion_env, &
-                         gcp_env, mp2_env, bs_env, kg_env, force, &
+                         harris_env, gcp_env, mp2_env, bs_env, kg_env, force, &
                          kpoints, WannierCentres, almo_scf_env, gradient_history, variable_history, embed_pot, &
-                         spin_embed_pot, polar_env, mos_last_converged, rhs)
+                         spin_embed_pot, polar_env, mos_last_converged, eeq, rhs, do_rixs, tb_tblite)
 
       TYPE(qs_environment_type), INTENT(INOUT)           :: qs_env
       TYPE(cell_type), OPTIONAL, POINTER                 :: super_cell
       TYPE(mo_set_type), DIMENSION(:), OPTIONAL, POINTER :: mos
-      LOGICAL, OPTIONAL                                  :: qmmm, qmmm_periodic
+      LOGICAL, OPTIONAL                                  :: qmmm, qmmm_periodic, mimic
       TYPE(ewald_environment_type), OPTIONAL, POINTER    :: ewald_env
       TYPE(ewald_pw_type), OPTIONAL, POINTER             :: ewald_pw
       TYPE(qs_matrix_pools_type), OPTIONAL, POINTER      :: mpools
@@ -1068,6 +1139,8 @@ CONTAINS
          POINTER                                         :: mo_derivs
       TYPE(cp_fm_type), DIMENSION(:), OPTIONAL, POINTER  :: mo_loc_history
       TYPE(efield_berry_type), OPTIONAL, POINTER         :: efield
+      TYPE(rhoz_cneo_type), DIMENSION(:), OPTIONAL, &
+         POINTER                                         :: rhoz_cneo_set
       TYPE(linres_control_type), OPTIONAL, POINTER       :: linres_control
       TYPE(xas_environment_type), OPTIONAL, POINTER      :: xas_env
       TYPE(cp_ddapc_type), OPTIONAL, POINTER             :: cp_ddapc_env
@@ -1091,6 +1164,7 @@ CONTAINS
       TYPE(excited_energy_type), OPTIONAL, POINTER       :: exstate_env
       TYPE(energy_correction_type), OPTIONAL, POINTER    :: ec_env
       TYPE(qs_dispersion_type), OPTIONAL, POINTER        :: dispersion_env
+      TYPE(harris_type), OPTIONAL, POINTER               :: harris_env
       TYPE(qs_gcp_type), OPTIONAL, POINTER               :: gcp_env
       TYPE(mp2_type), OPTIONAL, POINTER                  :: mp2_env
       TYPE(post_scf_bandstructure_type), OPTIONAL, &
@@ -1106,7 +1180,9 @@ CONTAINS
       TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: embed_pot, spin_embed_pot
       TYPE(polar_env_type), OPTIONAL, POINTER            :: polar_env
       TYPE(mo_set_type), DIMENSION(:), OPTIONAL, POINTER :: mos_last_converged
-      REAL(KIND=dp), DIMENSION(:), OPTIONAL, POINTER     :: rhs
+      REAL(KIND=dp), DIMENSION(:), OPTIONAL, POINTER     :: eeq, rhs
+      LOGICAL, OPTIONAL                                  :: do_rixs
+      TYPE(tblite_type), OPTIONAL, POINTER               :: tb_tblite
 
       TYPE(qs_subsys_type), POINTER                      :: subsys
 
@@ -1121,6 +1197,7 @@ CONTAINS
       !
       IF (PRESENT(qmmm)) qs_env%qmmm = qmmm
       IF (PRESENT(qmmm_periodic)) qs_env%qmmm_periodic = qmmm_periodic
+      IF (PRESENT(mimic)) qs_env%mimic = mimic
       IF (PRESENT(mos)) qs_env%mos => mos
       IF (PRESENT(mos_last_converged)) qs_env%mos_last_converged => mos_last_converged
       IF (PRESENT(ls_scf_env)) qs_env%ls_scf_env => ls_scf_env
@@ -1142,13 +1219,14 @@ CONTAINS
       IF (PRESENT(rtp)) qs_env%rtp => rtp
       IF (PRESENT(efield)) qs_env%efield => efield
       IF (PRESENT(active_space)) qs_env%active_space => active_space
+      IF (PRESENT(do_rixs)) do_rixs = qs_env%do_rixs
 
       IF (PRESENT(ewald_env)) THEN ! accept also null pointers?
          IF (ASSOCIATED(qs_env%ewald_env)) THEN
-         IF (.NOT. ASSOCIATED(qs_env%ewald_env, ewald_env)) THEN
-            CALL ewald_env_release(qs_env%ewald_env)
-            DEALLOCATE (qs_env%ewald_env)
-         END IF
+            IF (.NOT. ASSOCIATED(qs_env%ewald_env, ewald_env)) THEN
+               CALL ewald_env_release(qs_env%ewald_env)
+               DEALLOCATE (qs_env%ewald_env)
+            END IF
          END IF
          qs_env%ewald_env => ewald_env
       END IF
@@ -1181,20 +1259,20 @@ CONTAINS
       END IF
       IF (PRESENT(linres_control)) THEN ! accept also null pointers?
          IF (ASSOCIATED(qs_env%linres_control)) THEN
-         IF (.NOT. ASSOCIATED(qs_env%linres_control, linres_control)) THEN
-            CALL linres_control_release(qs_env%linres_control)
-            DEALLOCATE (qs_env%linres_control)
-         END IF
+            IF (.NOT. ASSOCIATED(qs_env%linres_control, linres_control)) THEN
+               CALL linres_control_release(qs_env%linres_control)
+               DEALLOCATE (qs_env%linres_control)
+            END IF
          END IF
          qs_env%linres_control => linres_control
       END IF
       ! ZMP associating variables
       IF (PRESENT(rho_external)) THEN
          IF (ASSOCIATED(qs_env%rho_external)) THEN
-         IF (.NOT. ASSOCIATED(qs_env%rho_external, rho_external)) THEN
-            CALL qs_rho_release(qs_env%rho_external)
-            DEALLOCATE (qs_env%rho_external)
-         END IF
+            IF (.NOT. ASSOCIATED(qs_env%rho_external, rho_external)) THEN
+               CALL qs_rho_release(qs_env%rho_external)
+               DEALLOCATE (qs_env%rho_external)
+            END IF
          END IF
          qs_env%rho_external => rho_external
       END IF
@@ -1241,10 +1319,10 @@ CONTAINS
       END IF
       IF (PRESENT(scf_env)) THEN ! accept also null pointers ?
          IF (ASSOCIATED(qs_env%scf_env)) THEN
-         IF (.NOT. ASSOCIATED(qs_env%scf_env, scf_env)) THEN
-            CALL scf_env_release(qs_env%scf_env)
-            DEALLOCATE (qs_env%scf_env)
-         END IF
+            IF (.NOT. ASSOCIATED(qs_env%scf_env, scf_env)) THEN
+               CALL scf_env_release(qs_env%scf_env)
+               DEALLOCATE (qs_env%scf_env)
+            END IF
          END IF
          qs_env%scf_env => scf_env
       END IF
@@ -1273,6 +1351,9 @@ CONTAINS
       END IF
       IF (PRESENT(rhoz_set)) THEN
          CALL set_local_rho(qs_env%local_rho_set, rhoz_set=rhoz_set)
+      END IF
+      IF (PRESENT(rhoz_cneo_set)) THEN
+         CALL set_local_rho(qs_env%local_rho_set, rhoz_cneo_set=rhoz_cneo_set)
       END IF
       IF (PRESENT(rhoz_tot)) qs_env%local_rho_set%rhoz_tot = rhoz_tot
       IF (PRESENT(ecoul_1c)) THEN
@@ -1312,22 +1393,26 @@ CONTAINS
       END IF
       IF (PRESENT(se_nonbond_env)) THEN
          IF (ASSOCIATED(qs_env%se_nonbond_env)) THEN
-         IF (.NOT. ASSOCIATED(qs_env%se_nonbond_env, se_nonbond_env)) THEN
-            CALL fist_nonbond_env_release(qs_env%se_nonbond_env)
-            DEALLOCATE (qs_env%se_nonbond_env)
-         END IF
+            IF (.NOT. ASSOCIATED(qs_env%se_nonbond_env, se_nonbond_env)) THEN
+               CALL fist_nonbond_env_release(qs_env%se_nonbond_env)
+               DEALLOCATE (qs_env%se_nonbond_env)
+            END IF
          END IF
          qs_env%se_nonbond_env => se_nonbond_env
       END IF
       IF (PRESENT(admm_env)) qs_env%admm_env => admm_env
       IF (PRESENT(lri_env)) qs_env%lri_env => lri_env
       IF (PRESENT(lri_density)) qs_env%lri_density => lri_density
+      IF (PRESENT(harris_env)) qs_env%harris_env => harris_env
       IF (PRESENT(ec_env)) qs_env%ec_env => ec_env
       IF (PRESENT(exstate_env)) qs_env%exstate_env => exstate_env
       IF (PRESENT(dispersion_env)) qs_env%dispersion_env => dispersion_env
       IF (PRESENT(gcp_env)) qs_env%gcp_env => gcp_env
       IF (PRESENT(WannierCentres)) qs_env%WannierCentres => WannierCentres
       IF (PRESENT(kpoints)) CALL set_ks_env(qs_env%ks_env, kpoints=kpoints)
+
+      ! EEQ charges
+      IF (PRESENT(eeq)) qs_env%eeq => eeq
 
       ! Resp charges
       IF (PRESENT(rhs)) qs_env%rhs => rhs
@@ -1336,6 +1421,8 @@ CONTAINS
          CALL get_qs_env(qs_env, subsys=subsys)
          CALL qs_subsys_set(subsys, force=force)
       END IF
+
+      IF (PRESENT(tb_tblite)) qs_env%tb_tblite => tb_tblite
 
    END SUBROUTINE set_qs_env
 
@@ -1548,6 +1635,9 @@ CONTAINS
          CALL lri_density_release(qs_env%lri_density)
          DEALLOCATE (qs_env%lri_density)
       END IF
+      IF (ASSOCIATED(qs_env%harris_env)) THEN
+         CALL harris_env_release(qs_env%harris_env)
+      END IF
       IF (ASSOCIATED(qs_env%ec_env)) THEN
          CALL ec_env_release(qs_env%ec_env)
       END IF
@@ -1580,8 +1670,15 @@ CONTAINS
          END DO
          DEALLOCATE (qs_env%WannierCentres)
       END IF
-      ! Resp charges
+      ! EEQ charges
+      IF (ASSOCIATED(qs_env%eeq)) DEALLOCATE (qs_env%eeq)
+      ! Resp chargeqq
       IF (ASSOCIATED(qs_env%rhs)) DEALLOCATE (qs_env%rhs)
+
+      ! tblite
+      IF (ASSOCIATED(qs_env%tb_tblite)) THEN
+         CALL deallocate_tblite_type(qs_env%tb_tblite)
+      END IF
 
    END SUBROUTINE qs_env_release
 
@@ -1765,6 +1862,9 @@ CONTAINS
          CALL lri_density_release(qs_env%lri_density)
          DEALLOCATE (qs_env%lri_density)
       END IF
+      IF (ASSOCIATED(qs_env%harris_env)) THEN
+         CALL harris_env_release(qs_env%harris_env)
+      END IF
       IF (ASSOCIATED(qs_env%ec_env)) THEN
          CALL ec_env_release(qs_env%ec_env)
       END IF
@@ -1794,8 +1894,15 @@ CONTAINS
          END DO
          DEALLOCATE (qs_env%WannierCentres)
       END IF
+      ! EEQ charges
+      IF (ASSOCIATED(qs_env%eeq)) DEALLOCATE (qs_env%eeq)
       ! Resp charges
       IF (ASSOCIATED(qs_env%rhs)) DEALLOCATE (qs_env%rhs)
+
+      ! tblite
+      IF (ASSOCIATED(qs_env%tb_tblite)) THEN
+         CALL deallocate_tblite_type(qs_env%tb_tblite)
+      END IF
 
    END SUBROUTINE qs_env_part_release
 

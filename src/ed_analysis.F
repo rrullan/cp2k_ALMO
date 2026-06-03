@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -21,6 +21,11 @@ MODULE ed_analysis
    USE cell_types,                      ONLY: cell_type
    USE core_ae,                         ONLY: build_erfc
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_distribution_type, dbcsr_get_info, &
+        dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, dbcsr_type_symmetric
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_dot,&
+                                              dbcsr_reserve_diag_blocks
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_plus_fm_fm_t,&
                                               cp_dbcsr_sm_fm_multiply
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -30,10 +35,6 @@ MODULE ed_analysis
         cp_fm_create, cp_fm_get_diag, cp_fm_get_element, cp_fm_get_info, cp_fm_get_submatrix, &
         cp_fm_release, cp_fm_set_all, cp_fm_set_element, cp_fm_set_submatrix, cp_fm_to_fm, &
         cp_fm_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_distribution_type, dbcsr_dot, dbcsr_get_info, &
-        dbcsr_p_type, dbcsr_release, dbcsr_reserve_diag_blocks, dbcsr_scale, dbcsr_set, &
-        dbcsr_type, dbcsr_type_symmetric
    USE hartree_local_methods,           ONLY: Vh_1c_gg_integrals
    USE hartree_local_types,             ONLY: ecoul_1center_type
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
@@ -71,6 +72,7 @@ MODULE ed_analysis
    USE qs_core_energies,                ONLY: calculate_ecore_alpha,&
                                               calculate_ecore_overlap,&
                                               calculate_ecore_self
+   USE qs_core_matrices,                ONLY: core_matrices
    USE qs_dispersion_pairpot,           ONLY: calculate_dispersion_pairpot
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
    USE qs_energy_types,                 ONLY: qs_energy_type
@@ -137,8 +139,8 @@ CONTAINS
       REAL(KIND=dp)                                      :: ateps, checksum, e1, e2, e_pot, ealpha, &
                                                             ecc, egcp, ehfx, ekts, evdw, focc, &
                                                             sum_energy
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: amval, ate1h, ate1xc, atecc, ateks, &
-                                                            atener, atewald, odiag
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: amval, atcore, ate1h, ate1xc, atecc, &
+                                                            ateks, atener, atewald, odiag
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: atdet, atmul, mcharge, mweight
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: bcenter
       REAL(KIND=dp), DIMENSION(:), POINTER               :: occupation_numbers
@@ -151,8 +153,9 @@ CONTAINS
       TYPE(dbcsr_distribution_type)                      :: dbcsr_dist
       TYPE(dbcsr_p_type)                                 :: dve_mat
       TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:)      :: exc_mat, ks_mat, vhxc_mat
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_h, matrix_hfx, matrix_ks, &
-                                                            matrix_p, matrix_s, matrix_t
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: core_mat, matrix_h, matrix_hfx, &
+                                                            matrix_ks, matrix_p, matrix_s, matrix_t
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: math, matp
       TYPE(dbcsr_type)                                   :: dkmat, dmat
       TYPE(dbcsr_type), POINTER                          :: smat
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -363,8 +366,7 @@ CONTAINS
       CALL dbcsr_get_info(smat, distribution=dbcsr_dist)
       CALL dbcsr_create(matrix=dmat, name="DMAT", &
                         dist=dbcsr_dist, matrix_type=dbcsr_type_symmetric, &
-                        row_blk_size=refbas_blk_sizes, col_blk_size=refbas_blk_sizes, &
-                        nze=0)
+                        row_blk_size=refbas_blk_sizes, col_blk_size=refbas_blk_sizes)
       CALL dbcsr_reserve_diag_blocks(dmat)
       !
       NULLIFY (fm_struct)
@@ -435,12 +437,15 @@ CONTAINS
       CALL cp_fm_release(cvec)
       CALL cp_fm_release(cvec2)
 
+      CALL get_qs_env(qs_env, para_env=para_env)
+      group = para_env
       ! energy arrays
-      ALLOCATE (atener(natom), ateks(natom), atecc(natom))
+      ALLOCATE (atener(natom), ateks(natom), atecc(natom), atcore(natom))
       ALLOCATE (ate1xc(natom), ate1h(natom), atewald(natom))
       atener = 0.0_dp
       ateks = 0.0_dp
       atecc = 0.0_dp
+      atcore = 0.0_dp
       ate1xc = 0.0_dp
       ate1h = 0.0_dp
       atewald = 0.0_dp
@@ -455,7 +460,7 @@ CONTAINS
       CALL dbcsr_set(dkmat, 0.0_dp)
       ! KS matrix + correction
       CALL get_qs_env(qs_env, matrix_h=matrix_h, matrix_ks=matrix_ks, kinetic=matrix_t)
-      ALLOCATE (ks_mat(nspin), vhxc_mat(nspin), exc_mat(1))
+      ALLOCATE (ks_mat(nspin), core_mat(1), vhxc_mat(nspin), exc_mat(1))
       DO ispin = 1, nspin
          ALLOCATE (ks_mat(ispin)%matrix)
          CALL dbcsr_create(ks_mat(ispin)%matrix, template=matrix_h(1)%matrix)
@@ -468,6 +473,12 @@ CONTAINS
          CALL dbcsr_copy(vhxc_mat(ispin)%matrix, smat)
          CALL dbcsr_set(vhxc_mat(ispin)%matrix, 0.0_dp)
       END DO
+      !
+      ALLOCATE (core_mat(1)%matrix)
+      CALL dbcsr_create(core_mat(1)%matrix, template=matrix_h(1)%matrix)
+      CALL dbcsr_copy(core_mat(1)%matrix, matrix_h(1)%matrix)
+      CALL dbcsr_set(core_mat(1)%matrix, 0.0_dp)
+      !
       ALLOCATE (exc_mat(1)%matrix)
       CALL dbcsr_create(exc_mat(1)%matrix, template=smat)
       CALL dbcsr_copy(exc_mat(1)%matrix, smat)
@@ -475,16 +486,25 @@ CONTAINS
       !
       CALL vhxc_correction(qs_env, vhxc_mat, exc_mat, atecc, ate1xc, ate1h)
       !
+      CALL get_qs_env(qs_env, rho=rho)
+      CALL qs_rho_get(rho, rho_ao=matrix_p)
+      math(1:1, 1:1) => core_mat(1:1)
+      matp(1:nspin, 1:1) => matrix_p(1:nspin)
+      CALL core_matrices(qs_env, math, matp, .FALSE., 0, atcore=atcore)
+      CALL group%sum(atcore)
+      !
       IF (ewald_correction) THEN
          ALLOCATE (dve_mat%matrix)
          CALL dbcsr_create(dve_mat%matrix, template=matrix_h(1)%matrix)
          CALL dbcsr_copy(dve_mat%matrix, matrix_h(1)%matrix)
          CALL dbcsr_set(dve_mat%matrix, 0.0_dp)
          CALL vh_ewald_correction(qs_env, ealpha, dve_mat, atewald)
+         CALL group%sum(atewald)
       END IF
       !
       DO ispin = 1, nspin
          CALL dbcsr_add(ks_mat(ispin)%matrix, vhxc_mat(ispin)%matrix, 1.0_dp, 1.0_dp)
+         CALL dbcsr_add(ks_mat(ispin)%matrix, core_mat(1)%matrix, 1.0_dp, -0.5_dp)
       END DO
       !
       IF (detailed_ener .AND. do_hfx) THEN
@@ -566,6 +586,8 @@ CONTAINS
             atmul(1:natom, 3) = atmul(1:natom, 3) - amval(1:natom)
          END DO
          atmul(1:natom, 2) = atmul(1:natom, 2) - atmul(1:natom, 1)
+         atmul(1:natom, 3) = atmul(1:natom, 3) + 0.5_dp*atmul(1:natom, 2)
+         atmul(1:natom, 2) = 0.5_dp*atmul(1:natom, 2) + 0.5_dp*atcore(1:natom)
       END IF
       !
       CALL dbcsr_release(dkmat)
@@ -575,9 +597,11 @@ CONTAINS
          DEALLOCATE (ks_mat(ispin)%matrix, vhxc_mat(ispin)%matrix)
          CALL deallocate_mo_set(mos_loc(ispin))
       END DO
+      CALL dbcsr_release(core_mat(1)%matrix)
+      DEALLOCATE (core_mat(1)%matrix)
       CALL dbcsr_release(exc_mat(1)%matrix)
       DEALLOCATE (exc_mat(1)%matrix)
-      DEALLOCATE (ks_mat, vhxc_mat, exc_mat)
+      DEALLOCATE (ks_mat, core_mat, vhxc_mat, exc_mat)
       DEALLOCATE (mos_loc)
       DEALLOCATE (refbas_blk_sizes)
       DEALLOCATE (ref_basis_set_list)
@@ -600,10 +624,10 @@ CONTAINS
          CALL cp_fm_release(fij_mat)
       END IF
 
-      CALL get_qs_env(qs_env, para_env=para_env)
-      group = para_env
       ! KS energy
       atener(1:natom) = ateks(1:natom)
+      ! 1/2 of VPP contribution Tr[VPP(K)*P]
+      atener(1:natom) = atener(1:natom) + 0.5_dp*atcore(1:natom)
       ! core energy corrections
       CALL group%sum(atecc)
       atener(1:natom) = atener(1:natom) + atecc(1:natom)
@@ -651,7 +675,12 @@ CONTAINS
       CALL get_qs_env(qs_env, energy=energy)
       ekts = energy%kts/REAL(natom, KIND=dp)
       atener(1:natom) = atener(1:natom) + ekts
-
+      ! 0.5 Vpp(at)*D + 0.5 * Vpp*D(at)
+      IF (detailed_ener) THEN
+         atdet(1:natom, 3) = atdet(1:natom, 3) + 0.5_dp*atdet(1:natom, 2)
+         atdet(1:natom, 2) = 0.5_dp*atdet(1:natom, 2) + 0.5_dp*atcore(1:natom)
+      END IF
+      !
       IF (detailed_ener) THEN
          IF (unit_nr > 0) THEN
             WRITE (unit_nr, FMT="(/,T2,A)") "Detailed IAO Atomic Energy Components "
@@ -726,7 +755,7 @@ CONTAINS
             "!--------------------------- END OF ED ANALYSIS ------------------------------!"
       END IF
       DEALLOCATE (bcenter)
-      DEALLOCATE (atener, ateks, atecc, ate1xc, ate1h, atewald)
+      DEALLOCATE (atener, ateks, atecc, atcore, ate1xc, ate1h, atewald)
 
       CALL timestop(handle)
 
@@ -904,8 +933,10 @@ CONTAINS
 
       INTEGER                                            :: handle, ikind, ispin, natom, nkind
       REAL(KIND=dp)                                      :: eps_core_charge, rhotot, zeff
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: alpha, atecc, ccore
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: alpha, atcore, atecc, ccore
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(dbcsr_p_type)                                 :: e_mat
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_p
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_orb, sac_ae
@@ -923,7 +954,7 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       natom = SIZE(atewd)
-      ALLOCATE (atecc(natom))
+      ALLOCATE (atecc(natom), atcore(natom))
       CALL get_qs_env(qs_env=qs_env, nkind=nkind, qs_kind_set=qs_kind_set, &
                       dft_control=dft_control)
       ALLOCATE (alpha(nkind), ccore(nkind))
@@ -971,25 +1002,38 @@ CONTAINS
       CALL dbcsr_scale(vh_mat%matrix, 0.5_dp)
       !
       ! delta erfc
+      CALL qs_rho_get(rho, rho_ao=matrix_p)
       eps_core_charge = dft_control%qs_control%eps_core_charge
+      ALLOCATE (e_mat%matrix)
+      CALL dbcsr_create(e_mat%matrix, template=vh_mat%matrix)
+      CALL dbcsr_copy(e_mat%matrix, vh_mat%matrix)
+      !
       CALL get_qs_env(qs_env=qs_env, atomic_kind_set=atomic_kind_set, &
                       particle_set=particle_set, sab_orb=sab_orb, sac_ppl=sac_ae)
-      CALL build_erfc(vh_mat, qs_kind_set, atomic_kind_set, particle_set, &
-                      alpha, ccore, eps_core_charge, sab_orb, sac_ae)
-      CALL dbcsr_scale(vh_mat%matrix, -1.0_dp)
+      CALL dbcsr_set(e_mat%matrix, 0.0_dp)
+      atcore = 0.0_dp
+      CALL build_erfc(e_mat, matrix_p, qs_kind_set, atomic_kind_set, particle_set, &
+                      alpha, ccore, eps_core_charge, sab_orb, sac_ae, atcore)
+      atewd(1:natom) = atewd(1:natom) + 0.5_dp*atcore(1:natom)
+      CALL dbcsr_add(vh_mat%matrix, e_mat%matrix, 1.0_dp, 0.5_dp)
       DO ikind = 1, nkind
          CALL get_qs_kind(qs_kind_set(ikind), alpha_core_charge=alpha(ikind), &
                           ccore_charge=ccore(ikind))
       END DO
-      CALL build_erfc(vh_mat, qs_kind_set, atomic_kind_set, particle_set, &
-                      alpha, ccore, eps_core_charge, sab_orb, sac_ae)
-      CALL dbcsr_scale(vh_mat%matrix, -1.0_dp)
+      CALL dbcsr_set(e_mat%matrix, 0.0_dp)
+      atcore = 0.0_dp
+      CALL build_erfc(e_mat, matrix_p, qs_kind_set, atomic_kind_set, particle_set, &
+                      alpha, ccore, eps_core_charge, sab_orb, sac_ae, atcore)
+      atewd(1:natom) = atewd(1:natom) - 0.5_dp*atcore(1:natom)
+      CALL dbcsr_add(vh_mat%matrix, e_mat%matrix, 1.0_dp, -0.5_dp)
       !
+      CALL dbcsr_release(e_mat%matrix)
+      DEALLOCATE (e_mat%matrix)
       CALL auxbas_pw_pool%give_back_pw(v_hewd_gspace)
       CALL auxbas_pw_pool%give_back_pw(v_hewd_rspace)
       CALL auxbas_pw_pool%give_back_pw(rho_tot_ewd_g)
       CALL auxbas_pw_pool%give_back_pw(rho_tot_ewd_r)
-      DEALLOCATE (atecc)
+      DEALLOCATE (atecc, atcore)
       DEALLOCATE (alpha, ccore)
 
       CALL timestop(handle)

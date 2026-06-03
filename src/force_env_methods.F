@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -30,6 +30,7 @@ MODULE force_env_methods
                                               scaled_to_real
    USE constraint_fxd,                  ONLY: fix_atom_control
    USE constraint_vsite,                ONLY: vsite_force_control
+   USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add
    USE cp_fm_types,                     ONLY: cp_fm_copy_general
@@ -39,7 +40,9 @@ MODULE force_env_methods
                                               cp_logger_type,&
                                               cp_rm_default_logger,&
                                               cp_to_string
-   USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
+   USE cp_output_handling,              ONLY: cp_p_file,&
+                                              cp_print_key_finished_output,&
+                                              cp_print_key_should_output,&
                                               cp_print_key_unit_nr,&
                                               low_print_level
    USE cp_result_methods,               ONLY: cp_results_erase,&
@@ -55,9 +58,12 @@ MODULE force_env_methods
                                               cp_subsys_p_type,&
                                               cp_subsys_set,&
                                               cp_subsys_type
+   USE cp_units,                        ONLY: cp_unit_from_cp2k
    USE eip_environment_types,           ONLY: eip_environment_type
    USE eip_silicon,                     ONLY: eip_bazant,&
-                                              eip_lenosky
+                                              eip_lenosky,&
+                                              eip_stillinger_weber,&
+                                              eip_tersoff
    USE embed_types,                     ONLY: embed_env_type,&
                                               opt_dmfet_pot_type,&
                                               opt_embed_pot_type
@@ -66,8 +72,8 @@ MODULE force_env_methods
    USE fist_force,                      ONLY: fist_calc_energy_force
    USE force_env_types,                 ONLY: &
         force_env_get, force_env_get_natom, force_env_p_type, force_env_set, force_env_type, &
-        use_eip_force, use_embed, use_fist_force, use_mixed_force, use_nnp_force, use_prog_name, &
-        use_pwdft_force, use_qmmm, use_qmmmx, use_qs_force
+        use_eip_force, use_embed, use_fist_force, use_ipi, use_mixed_force, use_nnp_force, &
+        use_prog_name, use_pwdft_force, use_qmmm, use_qmmmx, use_qs_force
    USE force_env_utils,                 ONLY: rescale_forces,&
                                               write_atener,&
                                               write_forces
@@ -83,16 +89,29 @@ MODULE force_env_methods
                                               globenv_retain
    USE grrm_utils,                      ONLY: write_grrm
    USE input_constants,                 ONLY: &
-        debug_run, dfet, dmfet, mix_cdft, mix_coupled, mix_generic, mix_linear_combination, &
-        mix_minimum, mix_restrained, mixed_cdft_serial, use_bazant_eip, use_lenosky_eip
+        cell_opt_run, debug_run, dfet, dmfet, do_method_gapw, do_method_gapw_xc, do_method_gpw, &
+        do_method_lrigpw, do_method_ofgpw, do_method_rigpw, driver_run, ehrenfest, geo_opt_run, &
+        mix_cdft, mix_coupled, mix_generic, mix_linear_combination, mix_minimum, mix_restrained, &
+        mixed_cdft_serial, mol_dyn_run, use_bazant_eip, use_lenosky_eip, use_stillinger_weber_eip, &
+        use_tersoff_eip
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_retain,&
                                               section_vals_type,&
                                               section_vals_val_get
+   USE ipi_environment_types,           ONLY: ipi_environment_type
+   USE ipi_server,                      ONLY: request_forces
    USE kahan_sum,                       ONLY: accurate_sum
    USE kinds,                           ONLY: default_path_length,&
                                               default_string_length,&
                                               dp
+   USE kpoint_methods,                  ONLY: kpoint_env_initialize,&
+                                              kpoint_initialize,&
+                                              kpoint_initialize_mos
+   USE kpoint_types,                    ONLY: get_kpoint_info,&
+                                              kpoint_reset_initialization,&
+                                              kpoint_sym_type,&
+                                              kpoint_type,&
+                                              set_kpoint_info
    USE machine,                         ONLY: m_memory
    USE mathlib,                         ONLY: abnormal_value
    USE message_passing,                 ONLY: mp_para_env_type
@@ -124,6 +143,7 @@ MODULE force_env_methods
         understand_spin_states
    USE particle_list_types,             ONLY: particle_list_p_type,&
                                               particle_list_type
+   USE particle_types,                  ONLY: particle_type
    USE physcon,                         ONLY: debye
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
@@ -140,13 +160,18 @@ MODULE force_env_methods
    USE qmmm_util,                       ONLY: apply_qmmm_translate
    USE qmmmx_force,                     ONLY: qmmmx_calc_energy_force
    USE qmmmx_types,                     ONLY: qmmmx_env_type
+   USE qs_apt_fdiff_methods,            ONLY: apt_fdiff
+   USE qs_basis_rotation_methods,       ONLY: qs_basis_rotation
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type,&
                                               set_qs_env
    USE qs_force,                        ONLY: qs_calc_energy_force
+   USE qs_mo_types,                     ONLY: mo_set_type
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
+   USE qs_wf_history_types,             ONLY: qs_wf_history_type,&
+                                              wfi_clear
    USE restraint,                       ONLY: restraint_control
    USE scine_utils,                     ONLY: write_scine
    USE string_utilities,                ONLY: compress
@@ -197,16 +222,16 @@ CONTAINS
 
       REAL(kind=dp), PARAMETER                           :: ateps = 1.0E-6_dp
 
-      INTEGER                                            :: i, ikind, j, nat, ndigits, nfixed_atoms, &
+      CHARACTER(LEN=default_string_length)               :: unit_string
+      INTEGER                                            :: ikind, nat, ndigits, nfixed_atoms, &
                                                             nfixed_atoms_total, nkind, &
                                                             output_unit, print_forces, print_grrm, &
                                                             print_scine
-      LOGICAL :: calculate_forces, calculate_stress_tensor, energy_consistency, eval_ef, &
-         linres_run, my_skip, print_components
-      REAL(KIND=dp)                                      :: checksum, e_gap, e_pot, sum_energy, &
-                                                            sum_pv_virial, sum_stress_tensor
+      LOGICAL :: calculate_forces, calculate_stress_tensor, do_apt_fd, energy_consistency, &
+         eval_ef, linres_run, my_skip, print_components
+      REAL(KIND=dp)                                      :: checksum, e_entropy, e_gap, e_pot, &
+                                                            fconv, sum_energy
       REAL(KIND=dp), DIMENSION(3)                        :: grand_total_force, total_force
-      REAL(KIND=dp), DIMENSION(3, 3)                     :: atomic_stress_tensor, diff_stress_tensor
       TYPE(atprop_type), POINTER                         :: atprop_env
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -216,6 +241,7 @@ CONTAINS
       TYPE(molecule_kind_type), POINTER                  :: molecule_kind
       TYPE(particle_list_type), POINTER                  :: core_particles, particles, &
                                                             shell_particles
+      TYPE(section_vals_type), POINTER                   :: print_key
       TYPE(virial_type), POINTER                         :: virial
 
       NULLIFY (logger, virial, subsys, atprop_env, cell)
@@ -226,6 +252,8 @@ CONTAINS
       energy_consistency = .FALSE.
       linres_run = .FALSE.
       e_gap = -1.0_dp
+      e_entropy = -1.0_dp
+      unit_string = ""
 
       IF (PRESENT(eval_energy_forces)) eval_ef = eval_energy_forces
       IF (PRESENT(skip_external_control)) my_skip = skip_external_control
@@ -252,6 +280,7 @@ CONTAINS
          CASE (use_fist_force)
             CALL fist_calc_energy_force(force_env%fist_env)
          CASE (use_qs_force)
+            CALL force_env_refresh_kpoint_symmetry(force_env, fd_energy=.NOT. calculate_forces)
             CALL qs_calc_energy_force(force_env%qs_env, calculate_forces, energy_consistency, linres_run)
          CASE (use_pwdft_force)
             IF (virial%pv_availability .AND. calculate_stress_tensor) THEN
@@ -260,12 +289,20 @@ CONTAINS
                CALL pwdft_calc_energy_force(force_env%pwdft_env, calculate_forces, .FALSE.)
             END IF
             e_gap = force_env%pwdft_env%energy%band_gap
+            e_entropy = force_env%pwdft_env%energy%entropy
          CASE (use_eip_force)
-            IF (force_env%eip_env%eip_model == use_lenosky_eip) THEN
+            SELECT CASE (force_env%eip_env%eip_model)
+            CASE (use_lenosky_eip)
                CALL eip_lenosky(force_env%eip_env)
-            ELSE IF (force_env%eip_env%eip_model == use_bazant_eip) THEN
+            CASE (use_bazant_eip)
                CALL eip_bazant(force_env%eip_env)
-            END IF
+            CASE (use_stillinger_weber_eip)
+               CALL eip_stillinger_weber(force_env%eip_env)
+            CASE (use_tersoff_eip)
+               CALL eip_tersoff(force_env%eip_env)
+            CASE DEFAULT
+               CPABORT("Unknown EIP model.")
+            END SELECT
          CASE (use_qmmm)
             CALL qmmm_calc_energy_force(force_env%qmmm_env, &
                                         calculate_forces, energy_consistency, linres=linres_run)
@@ -280,6 +317,8 @@ CONTAINS
                                        calculate_forces)
          CASE (use_embed)
             CALL embed_energy(force_env)
+         CASE (use_ipi)
+            CALL request_forces(force_env%ipi_env)
          CASE default
             CPABORT("")
          END SELECT
@@ -298,6 +337,19 @@ CONTAINS
                   CALL cp_warn(__LOCATION__, "The calculation of the stress tensor "// &
                                "requires the calculation of the forces")
                END IF
+            END IF
+         END IF
+      END IF
+
+      ! In case requested, compute the APT numerically
+      do_apt_FD = .FALSE.
+      IF (force_env%in_use == use_qs_force) THEN
+         CALL section_vals_val_get(force_env%qs_env%input, "PROPERTIES%LINRES%DCDR%APT_FD", l_val=do_apt_FD)
+         IF (do_apt_FD) THEN
+            print_key => section_vals_get_subs_vals(force_env%qs_env%input, &
+                                                    subsection_name="PROPERTIES%LINRES%DCDR%PRINT%APT")
+            IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
+               CALL apt_fdiff(force_env)
             END IF
          END IF
       END IF
@@ -327,15 +379,25 @@ CONTAINS
 
       CALL force_env_get(force_env, potential_energy=e_pot)
 
-      ! Print always Energy in the same format for all methods
+      ! Print energy always in the same format for all methods
       output_unit = cp_print_key_unit_nr(logger, force_env%force_env_section, "PRINT%PROGRAM_RUN_INFO", &
                                          extension=".Log")
       IF (output_unit > 0) THEN
-         WRITE (output_unit, '(/,T2,"ENERGY| Total FORCE_EVAL ( ",A," ) energy [a.u.]: ",T55,F26.15)') &
-            ADJUSTR(TRIM(use_prog_name(force_env%in_use))), e_pot
-         IF (e_gap .GT. -.1_dp) THEN
-            WRITE (output_unit, '(/,T2,"ENERGY| Total FORCE_EVAL ( ",A," ) gap [a.u.]: ",T55,F26.15)') &
-               ADJUSTR(TRIM(use_prog_name(force_env%in_use))), e_gap
+         CALL section_vals_val_get(force_env%force_env_section, "PRINT%PROGRAM_RUN_INFO%ENERGY_UNIT", &
+                                   c_val=unit_string)
+         fconv = cp_unit_from_cp2k(1.0_dp, TRIM(ADJUSTL(unit_string)))
+         WRITE (UNIT=output_unit, FMT="(/,T2,A,T55,F26.15)") &
+            "ENERGY| Total FORCE_EVAL ( "//TRIM(ADJUSTL(use_prog_name(force_env%in_use)))// &
+            " ) energy ["//TRIM(ADJUSTL(unit_string))//"]", e_pot*fconv
+         IF (e_gap > -0.1_dp) THEN
+            WRITE (UNIT=output_unit, FMT="(/,T2,A,T55,F26.15)") &
+               "ENERGY| Total FORCE_EVAL ( "//TRIM(ADJUSTL(use_prog_name(force_env%in_use)))// &
+               " ) gap ["//TRIM(ADJUSTL(unit_string))//"]", e_gap*fconv
+         END IF
+         IF (e_entropy > -0.1_dp) THEN
+            WRITE (UNIT=output_unit, FMT="(/,T2,A,T55,F26.15)") &
+               "ENERGY| Total FORCE_EVAL ( "//TRIM(ADJUSTL(use_prog_name(force_env%in_use)))// &
+               " ) free energy ["//TRIM(ADJUSTL(unit_string))//"]", (e_pot - e_entropy)*fconv
          END IF
       END IF
       CALL cp_print_key_finished_output(output_unit, logger, force_env%force_env_section, &
@@ -357,22 +419,24 @@ CONTAINS
          ! Variable precision output of the forces
          CALL section_vals_val_get(force_env%force_env_section, "PRINT%FORCES%NDIGITS", &
                                    i_val=ndigits)
+         CALL section_vals_val_get(force_env%force_env_section, "PRINT%FORCES%FORCE_UNIT", &
+                                   c_val=unit_string)
          IF (ASSOCIATED(core_particles) .OR. ASSOCIATED(shell_particles)) THEN
-            CALL write_forces(particles, print_forces, "ATOMIC", ndigits, total_force, &
-                              zero_force_core_shell_atom=.TRUE.)
+            CALL write_forces(particles, print_forces, "Atomic", ndigits, unit_string, &
+                              total_force, zero_force_core_shell_atom=.TRUE.)
             grand_total_force(1:3) = total_force(1:3)
             IF (ASSOCIATED(core_particles)) THEN
-               CALL write_forces(core_particles, print_forces, "CORE", ndigits, total_force, &
-                                 zero_force_core_shell_atom=.FALSE.)
+               CALL write_forces(core_particles, print_forces, "Core particle", ndigits, &
+                                 unit_string, total_force, zero_force_core_shell_atom=.FALSE.)
                grand_total_force(:) = grand_total_force(:) + total_force(:)
             END IF
             IF (ASSOCIATED(shell_particles)) THEN
-               CALL write_forces(shell_particles, print_forces, "SHELL", ndigits, total_force, &
-                                 zero_force_core_shell_atom=.FALSE., &
+               CALL write_forces(shell_particles, print_forces, "Shell particle", ndigits, &
+                                 unit_string, total_force, zero_force_core_shell_atom=.FALSE., &
                                  grand_total_force=grand_total_force)
             END IF
          ELSE
-            CALL write_forces(particles, print_forces, "ATOMIC", ndigits, total_force)
+            CALL write_forces(particles, print_forces, "Atomic", ndigits, unit_string, total_force)
          END IF
       END IF
       CALL cp_print_key_finished_output(print_forces, logger, force_env%force_env_section, "PRINT%FORCES")
@@ -387,12 +451,14 @@ CONTAINS
             IF (output_unit > 0) THEN
                CALL section_vals_val_get(force_env%force_env_section, "PRINT%STRESS_TENSOR%COMPONENTS", &
                                          l_val=print_components)
+               CALL section_vals_val_get(force_env%force_env_section, "PRINT%STRESS_TENSOR%STRESS_UNIT", &
+                                         c_val=unit_string)
                IF (print_components) THEN
                   IF ((.NOT. virial%pv_numer) .AND. (force_env%in_use == use_qs_force)) THEN
-                     CALL write_stress_tensor_components(virial, output_unit, cell)
+                     CALL write_stress_tensor_components(virial, output_unit, cell, unit_string)
                   END IF
                END IF
-               CALL write_stress_tensor(virial%pv_virial, output_unit, cell, virial%pv_numer)
+               CALL write_stress_tensor(virial%pv_virial, output_unit, cell, unit_string, virial%pv_numer)
             END IF
             CALL cp_print_key_finished_output(output_unit, logger, force_env%force_env_section, &
                                               "PRINT%STRESS_TENSOR")
@@ -464,71 +530,156 @@ CONTAINS
       END IF
       CALL cp_print_key_finished_output(print_scine, logger, force_env%force_env_section, "PRINT%SCINE")
 
-      ! Atomic stress
-      output_unit = cp_print_key_unit_nr(logger, force_env%force_env_section, "PRINT%PROGRAM_RUN_INFO", &
-                                         extension=".Log")
-
-      IF (atprop_env%stress) THEN
-         CALL force_env%para_env%sum(atprop_env%atstress)
-         ! symmetrize (same as pv_virial)
-         DO i = 1, SIZE(atprop_env%atstress, 3)
-            atprop_env%atstress(:, :, i) = 0.5_dp*(atprop_env%atstress(:, :, i) &
-                                                   + TRANSPOSE(atprop_env%atstress(:, :, i)))
-         END DO
-         IF (output_unit > 0) THEN
-            IF (logger%iter_info%print_level > low_print_level) THEN
-               DO i = 1, SIZE(atprop_env%atstress, 3)
-                  WRITE (UNIT=output_unit, FMT="(/,T2,I0,T16,A1,2(19X,A1))") i, "X", "Y", "Z"
-                  WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "X", (atprop_env%atstress(1, j, i), j=1, 3)
-                  WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Y", (atprop_env%atstress(2, j, i), j=1, 3)
-                  WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Z", (atprop_env%atstress(3, j, i), j=1, 3)
-                  WRITE (UNIT=output_unit, FMT="(T2,A,F20.13)") "1/3 Trace(Atomic stress tensor):", &
-                     (atprop_env%atstress(1, 1, i) + atprop_env%atstress(2, 2, i) + atprop_env%atstress(3, 3, i))/3.0_dp
-               END DO
-            END IF
-            atomic_stress_tensor(:, :) = 0.0_dp
-            DO i = 1, 3
-               atomic_stress_tensor(i, i) = accurate_sum(atprop_env%atstress(i, i, :))
-               DO j = i + 1, 3
-                  atomic_stress_tensor(i, j) = accurate_sum(atprop_env%atstress(i, j, :))
-                  atomic_stress_tensor(j, i) = atomic_stress_tensor(i, j)
-               END DO
-            END DO
-            WRITE (UNIT=output_unit, FMT="(/,T2,A,T15,A1,2(19X,A1))") "Atomic", "X", "Y", "Z"
-            WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "X", (atomic_stress_tensor(1, i), i=1, 3)
-            WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Y", (atomic_stress_tensor(2, i), i=1, 3)
-            WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Z", (atomic_stress_tensor(3, i), i=1, 3)
-            WRITE (UNIT=output_unit, FMT="(T2,A,10X,F20.13)") "1/3 Trace(Atomic stress tensor):", &
-               (atomic_stress_tensor(1, 1) + atomic_stress_tensor(2, 2) + atomic_stress_tensor(3, 3))/3.0_dp
-            sum_stress_tensor = accurate_sum(atomic_stress_tensor(:, :))
-            IF (virial%pv_availability .AND. calculate_forces) THEN
-               WRITE (UNIT=output_unit, FMT="(/,T2,A,T16,A1,2(19X,A1))") "Total", "X", "Y", "Z"
-               WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "X", (virial%pv_virial(1, i), i=1, 3)
-               WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Y", (virial%pv_virial(2, i), i=1, 3)
-               WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Z", (virial%pv_virial(3, i), i=1, 3)
-               WRITE (UNIT=output_unit, FMT="(T2,A,10X,F20.13)") "1/3 Trace(Total stress tensor): ", &
-                  (virial%pv_virial(1, 1) + virial%pv_virial(2, 2) + virial%pv_virial(3, 3))/3.0_dp
-               sum_pv_virial = SUM(virial%pv_virial(:, :))
-               diff_stress_tensor(:, :) = ABS(virial%pv_virial(:, :) - atomic_stress_tensor(:, :))
-               WRITE (UNIT=output_unit, FMT="(/,T2,A,T16,A1,2(19X,A1))") "Diff", "X", "Y", "Z"
-               WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "X", (diff_stress_tensor(1, i), i=1, 3)
-               WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Y", (diff_stress_tensor(2, i), i=1, 3)
-               WRITE (UNIT=output_unit, FMT="(A3,3F20.13)") "Z", (diff_stress_tensor(3, i), i=1, 3)
-               WRITE (UNIT=output_unit, FMT="(T2,A,10X,F20.13)") "1/3 Trace(Diff)               : ", &
-                  (diff_stress_tensor(1, 1) + diff_stress_tensor(2, 2) + diff_stress_tensor(3, 3))/3.0_dp
-               checksum = accurate_sum(diff_stress_tensor(:, :))
-               WRITE (UNIT=output_unit, FMT="(/,(T2,A,11X,F25.13))") &
-                  "Checksum stress (Atomic) :", sum_stress_tensor, &
-                  "Checksum stress (Total)  :", sum_pv_virial, &
-                  "Difference               :", checksum
-               CPASSERT(checksum < ateps)
-            END IF
-         END IF
-         CALL cp_print_key_finished_output(output_unit, logger, force_env%force_env_section, &
-                                           "PRINT%PROGRAM_RUN_INFO")
-      END IF
-
    END SUBROUTINE force_env_calc_energy_force
+
+! **************************************************************************************************
+!> \brief Rebuild k-point data for geometries whose atomic symmetry can change.
+!>        Atomic k-point symmetry may change when atoms or cell vectors move.
+!> \param force_env ...
+!> \param fd_energy ...
+! **************************************************************************************************
+   SUBROUTINE force_env_refresh_kpoint_symmetry(force_env, fd_energy)
+
+      TYPE(force_env_type), POINTER                      :: force_env
+      LOGICAL, INTENT(IN)                                :: fd_energy
+
+      CHARACTER(LEN=default_string_length)               :: kp_scheme
+      INTEGER                                            :: run_type_id
+      LOGICAL :: debug_full_kpoint_symmetry, debug_inversion_only, do_kpoints, dynamic_symmetry, &
+         full_grid, input_full_grid, input_inversion_symmetry_only, inversion_symmetry_only, &
+         kpoint_symmetry, moving_geometry, use_full_grid, use_inversion_symmetry_only
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(global_environment_type), POINTER             :: globenv
+      TYPE(kpoint_type), POINTER                         :: kpoints
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(qs_wf_history_type), POINTER                  :: wf_history
+      TYPE(section_vals_type), POINTER                   :: input, kpoint_section
+
+      IF (.NOT. ASSOCIATED(force_env)) RETURN
+      IF (force_env%in_use /= use_qs_force) RETURN
+
+      NULLIFY (globenv)
+      CALL force_env_get(force_env, globenv=globenv)
+      IF (.NOT. ASSOCIATED(globenv)) RETURN
+      run_type_id = globenv%run_type_id
+      moving_geometry = .FALSE.
+      SELECT CASE (run_type_id)
+      CASE (cell_opt_run, driver_run, ehrenfest, geo_opt_run, mol_dyn_run)
+         moving_geometry = .TRUE.
+      CASE DEFAULT
+         moving_geometry = .FALSE.
+      END SELECT
+      IF (run_type_id /= debug_run .AND. .NOT. moving_geometry) RETURN
+
+      NULLIFY (blacs_env, cell, dft_control, input, kpoint_section, kpoints, mos, para_env, &
+               particle_set, wf_history)
+      CALL get_qs_env(qs_env=force_env%qs_env, &
+                      blacs_env=blacs_env, &
+                      cell=cell, &
+                      dft_control=dft_control, &
+                      do_kpoints=do_kpoints, &
+                      input=input, &
+                      kpoints=kpoints, &
+                      mos=mos, &
+                      para_env=para_env, &
+                      particle_set=particle_set, &
+                      wf_history=wf_history)
+      IF (.NOT. do_kpoints) RETURN
+
+      CALL get_kpoint_info(kpoints, kp_scheme=kp_scheme, symmetry=kpoint_symmetry, full_grid=full_grid, &
+                           inversion_symmetry_only=inversion_symmetry_only)
+      IF (.NOT. kpoint_symmetry) RETURN
+      IF (TRIM(kp_scheme) /= "MONKHORST-PACK" .AND. TRIM(kp_scheme) /= "MACDONALD" .AND. &
+          TRIM(kp_scheme) /= "GENERAL") RETURN
+
+      input_full_grid = full_grid
+      input_inversion_symmetry_only = inversion_symmetry_only
+      debug_full_kpoint_symmetry = .FALSE.
+      IF (ASSOCIATED(input)) THEN
+         kpoint_section => section_vals_get_subs_vals(input, "DFT%KPOINTS")
+         CALL section_vals_val_get(kpoint_section, "FULL_GRID", l_val=input_full_grid)
+         CALL section_vals_val_get(kpoint_section, "INVERSION_SYMMETRY_ONLY", &
+                                   l_val=input_inversion_symmetry_only)
+         CALL section_vals_val_get(kpoint_section, "DEBUG_FULL_KPOINT_SYMMETRY", &
+                                   l_val=debug_full_kpoint_symmetry)
+      END IF
+      ! Moving geometries and DEBUG finite differences must not reuse atomic symmetry from
+      ! another geometry. Rebuild the k-point symmetry from the current cell and positions.
+      ! Keep numerical finite-difference energies and DFTB DEBUG checks on the established
+      ! inversion/time-reversal reduction.
+      debug_inversion_only = run_type_id == debug_run .AND. .NOT. debug_full_kpoint_symmetry .AND. &
+                             (fd_energy .OR. dft_control%qs_control%dftb)
+      use_full_grid = input_full_grid
+      use_inversion_symmetry_only = (input_inversion_symmetry_only .OR. debug_inversion_only) .AND. &
+                                    (.NOT. use_full_grid)
+      dynamic_symmetry = kpoint_symmetry .AND. .NOT. use_full_grid .AND. &
+                         .NOT. use_inversion_symmetry_only
+      IF (moving_geometry .AND. .NOT. dynamic_symmetry) RETURN
+      IF (moving_geometry .AND. .NOT. kpoint_has_nontrivial_atomic_symmetry(kpoints)) RETURN
+      CALL set_kpoint_info(kpoints, full_grid=use_full_grid, &
+                           inversion_symmetry_only=use_inversion_symmetry_only)
+
+      CALL kpoint_reset_initialization(kpoints)
+      CALL kpoint_initialize(kpoints, particle_set, cell)
+      CALL kpoint_env_initialize(kpoints, para_env, blacs_env, with_aux_fit=dft_control%do_admm)
+      CALL kpoint_initialize_mos(kpoints, mos)
+      CALL wfi_clear(wf_history)
+      CALL qs_basis_rotation(force_env%qs_env, kpoints)
+
+   END SUBROUTINE force_env_refresh_kpoint_symmetry
+
+! **************************************************************************************************
+!> \brief Return whether the current reduced mesh uses nontrivial atomic symmetry operations.
+!> \param kpoints ...
+!> \return has_symmetry
+! **************************************************************************************************
+   FUNCTION kpoint_has_nontrivial_atomic_symmetry(kpoints) RESULT(has_symmetry)
+
+      TYPE(kpoint_type), POINTER                         :: kpoints
+      LOGICAL                                            :: has_symmetry
+
+      INTEGER                                            :: iatom, ik, isym, natom
+      REAL(KIND=dp), DIMENSION(3, 3)                     :: eye3
+      TYPE(kpoint_sym_type), POINTER                     :: kpsym
+
+      has_symmetry = .FALSE.
+      IF (.NOT. ASSOCIATED(kpoints)) RETURN
+      IF (.NOT. ASSOCIATED(kpoints%kp_sym)) RETURN
+
+      eye3 = 0.0_dp
+      eye3(1, 1) = 1.0_dp
+      eye3(2, 2) = 1.0_dp
+      eye3(3, 3) = 1.0_dp
+
+      DO ik = 1, kpoints%nkp
+         kpsym => kpoints%kp_sym(ik)%kpoint_sym
+         IF (.NOT. ASSOCIATED(kpsym)) CYCLE
+         IF (.NOT. kpsym%apply_symmetry) CYCLE
+         IF (.NOT. ASSOCIATED(kpsym%rot)) CYCLE
+         IF (.NOT. ASSOCIATED(kpsym%f0)) CYCLE
+         IF (.NOT. ASSOCIATED(kpsym%fcell)) CYCLE
+
+         natom = SIZE(kpsym%f0, 1)
+         DO isym = 1, SIZE(kpsym%rot, 3)
+            IF (MAXVAL(ABS(kpsym%rot(1:3, 1:3, isym) - eye3(1:3, 1:3))) > 1.e-12_dp .OR. &
+                ANY(kpsym%fcell(1:3, 1:natom, isym) /= 0)) THEN
+               has_symmetry = .TRUE.
+               RETURN
+            END IF
+            DO iatom = 1, natom
+               IF (kpsym%f0(iatom, isym) /= iatom) THEN
+                  has_symmetry = .TRUE.
+                  RETURN
+               END IF
+            END DO
+         END DO
+      END DO
+
+   END FUNCTION kpoint_has_nontrivial_atomic_symmetry
 
 ! **************************************************************************************************
 !> \brief Evaluates the stress tensor and pressure numerically
@@ -547,22 +698,27 @@ CONTAINS
 
       REAL(kind=dp), PARAMETER                           :: default_dx = 0.001_dp
 
-      INTEGER                                            :: i, ip, iq, j, k, natom, ncore, nshell, &
-                                                            output_unit, symmetry_id
-      REAL(KIND=dp)                                      :: dx_w
+      CHARACTER(LEN=default_string_length)               :: unit_string
+      INTEGER                                            :: i, ip, iq, j, k, method_id, natom, &
+                                                            ncore, nshell, output_unit, symmetry_id
+      LOGICAL                                            :: use_sym_strain_2d
+      REAL(KIND=dp)                                      :: dx_w, eps_w
       REAL(KIND=dp), DIMENSION(2)                        :: numer_energy
       REAL(KIND=dp), DIMENSION(3)                        :: s
-      REAL(KIND=dp), DIMENSION(3, 3)                     :: numer_stress
+      REAL(KIND=dp), DIMENSION(3, 3)                     :: hmat_deformed, numer_pv_2d, &
+                                                            numer_stress, strain
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: ref_pos_atom, ref_pos_core, ref_pos_shell
       TYPE(cell_type), POINTER                           :: cell, cell_local
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_subsys_type), POINTER                      :: subsys
+      TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(global_environment_type), POINTER             :: globenv
       TYPE(particle_list_type), POINTER                  :: core_particles, particles, &
                                                             shell_particles
       TYPE(virial_type), POINTER                         :: virial
 
       NULLIFY (cell_local)
+      NULLIFY (dft_control)
       NULLIFY (core_particles)
       NULLIFY (particles)
       NULLIFY (shell_particles)
@@ -570,15 +726,18 @@ CONTAINS
       NULLIFY (ref_pos_core)
       NULLIFY (ref_pos_shell)
       natom = 0
+      method_id = 0
       ncore = 0
       nshell = 0
+      numer_pv_2d = 0.0_dp
       numer_stress = 0.0_dp
+      use_sym_strain_2d = .FALSE.
 
       logger => cp_get_default_logger()
 
       dx_w = default_dx
       IF (PRESENT(dx)) dx_w = dx
-      CALL force_env_get(force_env, subsys=subsys, globenv=globenv)
+      CALL force_env_get(force_env, subsys=subsys, globenv=globenv, in_use=method_id)
       CALL cp_subsys_get(subsys, &
                          core_particles=core_particles, &
                          particles=particles, &
@@ -587,8 +746,8 @@ CONTAINS
       output_unit = cp_print_key_unit_nr(logger, force_env%force_env_section, "PRINT%STRESS_TENSOR", &
                                          extension=".stress_tensor")
       IF (output_unit > 0) THEN
-         WRITE (output_unit, '(/A,A/)') ' **************************** ', &
-            'NUMERICAL STRESS ********************************'
+         WRITE (output_unit, "(/A,A/)") " **************************** ", &
+            "NUMERICAL STRESS ********************************"
       END IF
 
       ! Save all original particle positions
@@ -618,12 +777,41 @@ CONTAINS
       !
       CALL cell_create(cell_local)
       CALL cell_clone(cell, cell_local)
+      IF (COUNT(cell_local%perd /= 0) == 2 .AND. method_id == use_qs_force) THEN
+         CALL get_qs_env(qs_env=force_env%qs_env, dft_control=dft_control)
+         SELECT CASE (dft_control%qs_control%method_id)
+         CASE (do_method_gapw, do_method_gapw_xc, do_method_gpw, &
+               do_method_lrigpw, do_method_ofgpw, do_method_rigpw)
+            use_sym_strain_2d = .TRUE.
+         END SELECT
+      END IF
       ! First change box
       DO ip = 1, 3
          DO iq = 1, 3
+            IF (use_sym_strain_2d) THEN
+               IF (cell_local%perd(ip) == 0 .OR. cell_local%perd(iq) == 0) CYCLE
+               IF (iq < ip) CYCLE
+            END IF
             IF (virial%pv_diagonal .AND. (ip /= iq)) CYCLE
             DO k = 1, 2
-               cell%hmat(ip, iq) = cell_local%hmat(ip, iq) - (-1.0_dp)**k*dx_w
+               hmat_deformed = cell_local%hmat
+               IF (use_sym_strain_2d) THEN
+                  eps_w = -(-1.0_dp)**k*dx_w
+                  strain = 0.0_dp
+                  DO i = 1, 3
+                     strain(i, i) = 1.0_dp
+                  END DO
+                  IF (ip == iq) THEN
+                     strain(ip, ip) = strain(ip, ip) + eps_w
+                  ELSE
+                     strain(ip, iq) = strain(ip, iq) + 0.5_dp*eps_w
+                     strain(iq, ip) = strain(iq, ip) + 0.5_dp*eps_w
+                  END IF
+                  hmat_deformed = MATMUL(strain, cell_local%hmat)
+               ELSE
+                  hmat_deformed(ip, iq) = hmat_deformed(ip, iq) - (-1.0_dp)**k*dx_w
+               END IF
+               cell%hmat = hmat_deformed
                CALL init_cell(cell)
                ! Scale positions
                DO i = 1, natom
@@ -645,25 +833,47 @@ CONTAINS
                                                 calc_stress_tensor=.FALSE.)
                CALL force_env_get(force_env, potential_energy=numer_energy(k))
                ! Reset cell
-               cell%hmat(ip, iq) = cell_local%hmat(ip, iq)
+               cell%hmat = cell_local%hmat
             END DO
             CALL init_cell(cell)
-            numer_stress(ip, iq) = 0.5_dp*(numer_energy(1) - numer_energy(2))/dx_w
-            IF (output_unit > 0) THEN
-               IF (globenv%run_type_id == debug_run) THEN
-                  WRITE (UNIT=output_unit, FMT="(/,T2,A,T19,A,F7.4,A,T44,A,F7.4,A,T69,A)") &
-                     "DEBUG|", "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" +", dx_w, ")", &
-                     "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" -", dx_w, ")", &
-                     "f(numerical)"
-                  WRITE (UNIT=output_unit, FMT="(T2,A,2(1X,F24.8),1X,F22.8)") &
-                     "DEBUG|", numer_energy(1:2), numer_stress(ip, iq)
-               ELSE
-                  WRITE (UNIT=output_unit, FMT="(/,T7,A,F7.4,A,T27,A,F7.4,A,T49,A)") &
-                     "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" +", dx_w, ")", &
-                     "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" -", dx_w, ")", &
-                     "f(numerical)"
-                  WRITE (UNIT=output_unit, FMT="(3(1X,F19.8))") &
-                     numer_energy(1:2), numer_stress(ip, iq)
+            IF (use_sym_strain_2d) THEN
+               numer_pv_2d(ip, iq) = -0.5_dp*(numer_energy(1) - numer_energy(2))/dx_w
+               numer_pv_2d(iq, ip) = numer_pv_2d(ip, iq)
+               IF (output_unit > 0) THEN
+                  IF (globenv%run_type_id == debug_run) THEN
+                     WRITE (UNIT=output_unit, FMT="(/,T2,A,T19,A,F7.4,A,T44,A,F7.4,A,T69,A)") &
+                        "DEBUG|", "E(e"//ACHAR(119 + ip)//ACHAR(119 + iq)//" +", dx_w, ")", &
+                        "E(e"//ACHAR(119 + ip)//ACHAR(119 + iq)//" -", dx_w, ")", &
+                        "pv(numerical)"
+                     WRITE (UNIT=output_unit, FMT="(T2,A,2(1X,F24.8),1X,F22.8)") &
+                        "DEBUG|", numer_energy(1:2), numer_pv_2d(ip, iq)
+                  ELSE
+                     WRITE (UNIT=output_unit, FMT="(/,T7,A,F7.4,A,T27,A,F7.4,A,T49,A)") &
+                        "E(e"//ACHAR(119 + ip)//ACHAR(119 + iq)//" +", dx_w, ")", &
+                        "E(e"//ACHAR(119 + ip)//ACHAR(119 + iq)//" -", dx_w, ")", &
+                        "pv(numerical)"
+                     WRITE (UNIT=output_unit, FMT="(3(1X,F19.8))") &
+                        numer_energy(1:2), numer_pv_2d(ip, iq)
+                  END IF
+               END IF
+            ELSE
+               numer_stress(ip, iq) = 0.5_dp*(numer_energy(1) - numer_energy(2))/dx_w
+               IF (output_unit > 0) THEN
+                  IF (globenv%run_type_id == debug_run) THEN
+                     WRITE (UNIT=output_unit, FMT="(/,T2,A,T19,A,F7.4,A,T44,A,F7.4,A,T69,A)") &
+                        "DEBUG|", "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" +", dx_w, ")", &
+                        "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" -", dx_w, ")", &
+                        "f(numerical)"
+                     WRITE (UNIT=output_unit, FMT="(T2,A,2(1X,F24.8),1X,F22.8)") &
+                        "DEBUG|", numer_energy(1:2), numer_stress(ip, iq)
+                  ELSE
+                     WRITE (UNIT=output_unit, FMT="(/,T7,A,F7.4,A,T27,A,F7.4,A,T49,A)") &
+                        "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" +", dx_w, ")", &
+                        "E("//ACHAR(119 + ip)//ACHAR(119 + iq)//" -", dx_w, ")", &
+                        "f(numerical)"
+                     WRITE (UNIT=output_unit, FMT="(3(1X,F19.8))") &
+                        numer_energy(1:2), numer_stress(ip, iq)
+                  END IF
                END IF
             END IF
          END DO
@@ -688,22 +898,27 @@ CONTAINS
 
       ! Computing pv_test
       virial%pv_virial = 0.0_dp
-      DO i = 1, 3
-         DO j = 1, 3
-            DO k = 1, 3
-               virial%pv_virial(i, j) = virial%pv_virial(i, j) - &
-                                        0.5_dp*(numer_stress(i, k)*cell_local%hmat(j, k) + &
-                                                numer_stress(j, k)*cell_local%hmat(i, k))
+      IF (use_sym_strain_2d) THEN
+         virial%pv_virial = numer_pv_2d
+      ELSE
+         DO i = 1, 3
+            DO j = 1, 3
+               DO k = 1, 3
+                  virial%pv_virial(i, j) = virial%pv_virial(i, j) - &
+                                           0.5_dp*(numer_stress(i, k)*cell_local%hmat(j, k) + &
+                                                   numer_stress(j, k)*cell_local%hmat(i, k))
+               END DO
             END DO
          END DO
-      END DO
-
+      END IF
       IF (output_unit > 0) THEN
          IF (globenv%run_type_id == debug_run) THEN
-            CALL write_stress_tensor(virial%pv_virial, output_unit, cell, virial%pv_numer)
+            CALL section_vals_val_get(force_env%force_env_section, "PRINT%FORCES%FORCE_UNIT", &
+                                      c_val=unit_string)
+            CALL write_stress_tensor(virial%pv_virial, output_unit, cell, unit_string, virial%pv_numer)
          END IF
-         WRITE (output_unit, '(/,A,/)') ' **************************** '// &
-            'NUMERICAL STRESS END *****************************'
+         WRITE (output_unit, "(/,A,/)") " **************************** "// &
+            "NUMERICAL STRESS END *****************************"
       END IF
 
       CALL cp_print_key_finished_output(output_unit, logger, force_env%force_env_section, &
@@ -742,13 +957,14 @@ CONTAINS
 !> \param mixed_env ...
 !> \param embed_env ...
 !> \param nnp_env ...
+!> \param ipi_env ...
 !> \par History
 !>      04.2003 created [fawzi]
 !> \author fawzi
 ! **************************************************************************************************
    SUBROUTINE force_env_create(force_env, root_section, para_env, globenv, fist_env, &
                                qs_env, meta_env, sub_force_env, qmmm_env, qmmmx_env, eip_env, pwdft_env, force_env_section, &
-                               mixed_env, embed_env, nnp_env)
+                               mixed_env, embed_env, nnp_env, ipi_env)
 
       TYPE(force_env_type), POINTER                      :: force_env
       TYPE(section_vals_type), POINTER                   :: root_section
@@ -767,6 +983,7 @@ CONTAINS
       TYPE(mixed_environment_type), OPTIONAL, POINTER    :: mixed_env
       TYPE(embed_env_type), OPTIONAL, POINTER            :: embed_env
       TYPE(nnp_type), OPTIONAL, POINTER                  :: nnp_env
+      TYPE(ipi_environment_type), OPTIONAL, POINTER      :: ipi_env
 
       ALLOCATE (force_env)
       NULLIFY (force_env%fist_env, force_env%qs_env, &
@@ -846,6 +1063,12 @@ CONTAINS
          CPASSERT(force_env%in_use == 0)
          force_env%in_use = use_nnp_force
          force_env%nnp_env => nnp_env
+      END IF
+      IF (PRESENT(ipi_env)) THEN
+         CPASSERT(ASSOCIATED(ipi_env))
+         CPASSERT(force_env%in_use == 0)
+         force_env%in_use = use_ipi
+         force_env%ipi_env => ipi_env
       END IF
       CPASSERT(force_env%in_use /= 0)
 
@@ -1152,7 +1375,7 @@ CONTAINS
          IF (SIZE(itmplist) /= 2) &
             CALL cp_abort(__LOCATION__, &
                           "Keyword FORCE_STATES takes exactly two input values.")
-         IF (ANY(itmplist .LT. 0)) &
+         IF (ANY(itmplist < 0)) &
             CPABORT("Invalid force_eval index.")
          istate = itmplist
          IF (istate(1) > nforce_eval .OR. istate(2) > nforce_eval) &
@@ -1291,7 +1514,7 @@ CONTAINS
       DO iforce_eval = 1, nforce_eval
          IF (.NOT. ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env)) CYCLE
          ! From this point on the error is the sub_error
-         IF (force_env%mixed_env%cdft_control%run_type == mixed_cdft_serial .AND. iforce_eval .GE. 2) THEN
+         IF (force_env%mixed_env%cdft_control%run_type == mixed_cdft_serial .AND. iforce_eval >= 2) THEN
             my_logger => force_env%mixed_env%cdft_control%sub_logger(iforce_eval - 1)%p
          ELSE
             my_group = force_env%mixed_env%group_distribution(force_env%para_env%mepos)
@@ -1450,7 +1673,7 @@ CONTAINS
             NULLIFY (dft_control)
             CALL get_qs_env(force_env%sub_force_env(iforce_eval)%force_env%qs_env, dft_control=dft_control)
             IF (dft_control%qs_control%ref_embed_subsys) THEN
-               IF (iforce_eval .EQ. 2) CPABORT("Density importing force_eval can't be the first.")
+               IF (iforce_eval == 2) CPABORT("Density importing force_eval can't be the first.")
             END IF
          END IF
 
@@ -1679,7 +1902,7 @@ CONTAINS
          CALL pw_axpy(rho_r_ref(i_spin), diff_rho_r, -1.0_dp)
       END DO
       IF (opt_embed%open_shell_embed) THEN ! Spin part
-         IF (nspins .EQ. 2) THEN ! Reference systems has an open shell, else the reference diff_rho_spin is zero
+         IF (nspins == 2) THEN ! Reference systems has an open shell, else the reference diff_rho_spin is zero
             CALL pw_axpy(rho_r_ref(1), diff_rho_spin, -1.0_dp)
             CALL pw_axpy(rho_r_ref(2), diff_rho_spin, 1.0_dp)
          END IF
@@ -1696,9 +1919,9 @@ CONTAINS
             CALL pw_axpy(rho_r_subsys(i_spin), diff_rho_r, allow_noncompatible_grids=.TRUE.)
          END DO
          IF (opt_embed%open_shell_embed) THEN ! Spin part
-            IF (nspins_subsys .EQ. 2) THEN ! The subsystem makes contribution if it is spin-polarized
+            IF (nspins_subsys == 2) THEN ! The subsystem makes contribution if it is spin-polarized
                ! We may need to change spin ONLY FOR THE SECOND SUBSYSTEM: that's the internal convention
-               IF ((i_force_eval .EQ. 2) .AND. (opt_embed%change_spin)) THEN
+               IF ((i_force_eval == 2) .AND. (opt_embed%change_spin)) THEN
                   CALL pw_axpy(rho_r_subsys(1), diff_rho_spin, -1.0_dp, allow_noncompatible_grids=.TRUE.)
                   CALL pw_axpy(rho_r_subsys(2), diff_rho_spin, 1.0_dp, allow_noncompatible_grids=.TRUE.)
                ELSE
@@ -1729,7 +1952,7 @@ CONTAINS
          mapping_section => section_vals_get_subs_vals(embed_section, "MAPPING")
 
          DO i_force_eval = 1, ref_subsys_number - 1
-            IF (i_force_eval .EQ. 1) THEN
+            IF (i_force_eval == 1) THEN
                CALL Coulomb_guess(embed_pot, rhs, mapping_section, &
                                   force_env%sub_force_env(i_force_eval)%force_env%qs_env, nforce_eval, i_force_eval, opt_embed%eta)
             ELSE
@@ -1763,7 +1986,7 @@ CONTAINS
          END DO
          IF (opt_embed%open_shell_embed) THEN ! Spin part
             CALL pw_zero(diff_rho_spin)
-            IF (nspins .EQ. 2) THEN ! Reference systems has an open shell, else the reference diff_rho_spin is zero
+            IF (nspins == 2) THEN ! Reference systems has an open shell, else the reference diff_rho_spin is zero
                CALL pw_axpy(rho_r_ref(1), diff_rho_spin, -1.0_dp)
                CALL pw_axpy(rho_r_ref(2), diff_rho_spin, 1.0_dp)
             END IF
@@ -1774,7 +1997,7 @@ CONTAINS
             CALL get_qs_env(force_env%sub_force_env(i_force_eval)%force_env%qs_env, dft_control=dft_control)
             nspins_subsys = dft_control%nspins
 
-            IF ((i_force_eval .EQ. 2) .AND. (opt_embed%change_spin)) THEN
+            IF ((i_force_eval == 2) .AND. (opt_embed%change_spin)) THEN
                ! Here we change the sign of the spin embedding potential due to spin change:
                ! only in spin_embed_subsys
                CALL make_subsys_embed_pot(force_env%sub_force_env(i_force_eval)%force_env%qs_env, &
@@ -1791,7 +2014,7 @@ CONTAINS
 
             ! Add the embedding potential
             CALL set_qs_env(force_env%sub_force_env(i_force_eval)%force_env%qs_env, embed_pot=embed_pot_subsys)
-            IF ((opt_embed%open_shell_embed) .AND. (nspins_subsys .EQ. 2)) THEN ! Spin part
+            IF ((opt_embed%open_shell_embed) .AND. (nspins_subsys == 2)) THEN ! Spin part
                CALL set_qs_env(force_env%sub_force_env(i_force_eval)%force_env%qs_env, &
                                spin_embed_pot=spin_embed_pot_subsys)
             END IF
@@ -1825,9 +2048,9 @@ CONTAINS
                CALL pw_axpy(rho_r_subsys(i_spin), diff_rho_r, allow_noncompatible_grids=.TRUE.)
             END DO
             IF (opt_embed%open_shell_embed) THEN ! Spin part
-               IF (nspins_subsys .EQ. 2) THEN ! The subsystem makes contribution if it is spin-polarized
+               IF (nspins_subsys == 2) THEN ! The subsystem makes contribution if it is spin-polarized
                   ! We may need to change spin ONLY FOR THE SECOND SUBSYSTEM: that's the internal convention
-                  IF ((i_force_eval .EQ. 2) .AND. (opt_embed%change_spin)) THEN
+                  IF ((i_force_eval == 2) .AND. (opt_embed%change_spin)) THEN
                      CALL pw_axpy(rho_r_subsys(1), diff_rho_spin, -1.0_dp, allow_noncompatible_grids=.TRUE.)
                      CALL pw_axpy(rho_r_subsys(2), diff_rho_spin, 1.0_dp, allow_noncompatible_grids=.TRUE.)
                   ELSE
@@ -1863,7 +2086,7 @@ CONTAINS
          ! Spin part
          IF (opt_embed%open_shell_embed) THEN
             ! If reference system is not spin-polarized then it does not make a contribution to W functional
-            IF (nspins .EQ. 2) THEN
+            IF (nspins == 2) THEN
                opt_embed%w_func(i_iter) = opt_embed%w_func(i_iter) &
                                           - pw_integral_ab(spin_embed_pot, rho_r_ref(1)) &
                                           + pw_integral_ab(spin_embed_pot, rho_r_ref(2))
@@ -1878,7 +2101,7 @@ CONTAINS
          IF (opt_embed%converged) EXIT
 
          ! Update the trust radius and control the step
-         IF ((i_iter .GT. 1) .AND. (.NOT. opt_embed%steep_desc)) CALL step_control(opt_embed)
+         IF ((i_iter > 1) .AND. (.NOT. opt_embed%steep_desc)) CALL step_control(opt_embed)
 
          ! Print density difference
          CALL print_rho_diff(diff_rho_r, i_iter, force_env%sub_force_env(ref_subsys_number)%force_env%qs_env, .FALSE.)
@@ -1937,7 +2160,7 @@ CONTAINS
 
          CALL set_qs_env(force_env%sub_force_env(ref_subsys_number + 1)%force_env%qs_env, embed_pot=embed_pot_subsys)
 
-         IF ((opt_embed%open_shell_embed) .AND. (nspins_subsys .EQ. 2)) THEN
+         IF ((opt_embed%open_shell_embed) .AND. (nspins_subsys == 2)) THEN
             CALL set_qs_env(force_env%sub_force_env(ref_subsys_number + 1)%force_env%qs_env, &
                             spin_embed_pot=spin_embed_pot_subsys)
          END IF
@@ -2092,7 +2315,7 @@ CONTAINS
 
             IF (opt_dmfet%open_shell_embed) THEN ! Open-shell embedding
                ! We may need to change spin ONLY FOR THE SECOND SUBSYSTEM: that's the internal convention
-               IF ((i_force_eval .EQ. 2) .AND. (opt_dmfet%change_spin)) THEN
+               IF ((i_force_eval == 2) .AND. (opt_dmfet%change_spin)) THEN
                   CALL cp_fm_scale_and_add(-1.0_dp, opt_dmfet%dm_diff_beta, 1.0_dp, opt_dmfet%dm_subsys)
                   CALL cp_fm_scale_and_add(-1.0_dp, opt_dmfet%dm_diff, 1.0_dp, opt_dmfet%dm_subsys_beta)
                ELSE

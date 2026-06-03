@@ -25,10 +25,13 @@ QS/regtest-admm-qps/O2-triplett-ADMMP-debug_forces.inp
 QS/regtest-almo-2/ion-pair.inp
 QS/regtest-almo-trustr/FHchain-dogleg.inp
 QS/regtest-dm-ls-scf-3/C_TRS4.inp
+QS/regtest-dm-ls-scf-4/H2O-dft-ls-STRESS-TENSOR.inp
 QS/regtest-hfx-block/H2-block-06.inp
 QS/regtest-hfx-ri/Ne-hybrid-periodic-shortrange.inp
 QS/regtest-hfx-ri/CH-hfx-ri-rho.inp
 QS/regtest-hfx-ri/CH3-hfx-converged.inp
+QS/regtest-hfx-ri-2/H2O-pbe0-stress-truncated.inp
+QS/regtest-kp-hfx-ri-2/hBN_gapw_ovlp.inp
 QS/regtest-kp-2/Ar_1.inp
 QS/regtest-kp-2/cc1.inp
 QS/regtest-kp-2/cc2.inp
@@ -37,6 +40,8 @@ QS/regtest-loc_powf/run.inp
 QS/regtest-ls-rtp/Ar_mixed_aa_planar-rtp-osc-field.inp
 QS/regtest-pao-2/H2O_pao_rotinv.inp
 QS/regtest-pod/furane-pbe-4A.inp
+QS/regtest-ps-implicit-1-3/Ar_mixed_aa_planar.inp
+QS/regtest-ps-implicit-1-3/Ar_mixed_planar.inp
 QS/regtest-ps-implicit-1-3/Ar_mixed_aa_planar-osc-field.inp
 QS/regtest-ps-implicit-2-1/H2O_periodic.inp
 QS/regtest-ps-implicit-2-1/H2plus2_implicit_md.inp
@@ -48,6 +53,7 @@ QS/regtest-rel/h2o-3.inp
 xTB/regtest-5/AdeThyvdW.inp
 xTB/regtest-5/ef_stress1.inp
 xTB/regtest-5/ef_stress3.inp
+xTB/regtest-tblite-gfn2/Si_gfn2_kp_stress.inp
 QS/regtest-admm-qps/CH4-ADMMS-stress-tensor-numerical.inp
 QS/regtest-xc/3H2_PBE.inp
 QS/regtest-xc/3H2_PBEsol.inp
@@ -83,5 +89,10 @@ QS/regtest-sccs-3/H2O_sccs_td_cd5_geo_opt.inp
 QS/regtest-sccs-2/H2O_sccs_otdiis_cd5.inp
 QS/regtest-lsroks/ch2o_rs.inp
 QS/regtest-rtp-5/H2O-wfn-mix-dens-pulse-1.inp
+QS/regtest-tddfpt-force-2/h2o_f14.inp
+QS/regtest-tddfpt-force/h2o_tddfpt_newtonx.inp
+QS/regtest-tddfpt-force-gapw/h2o_t08.inp
+QS/regtest-smeagol-1/au-2x2x3-bulk.inp
+QS/regtest-smeagol-2/au-1x1x4-bulk.inp
 
 #EOF

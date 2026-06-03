@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -21,6 +21,9 @@ MODULE rpa_util
                                               cp_cfm_release,&
                                               cp_cfm_set_all,&
                                               cp_cfm_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_create, dbcsr_deallocate_matrix, dbcsr_filter, dbcsr_get_info, dbcsr_multiply, &
+        dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               dbcsr_allocate_matrix_set,&
@@ -34,9 +37,6 @@ MODULE rpa_util
    USE cp_fm_types,                     ONLY: &
         cp_fm_copy_general, cp_fm_create, cp_fm_get_info, cp_fm_release, cp_fm_set_all, &
         cp_fm_set_element, cp_fm_to_fm, cp_fm_to_fm_submat_general, cp_fm_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_create, dbcsr_deallocate_matrix, dbcsr_filter, dbcsr_get_info, dbcsr_multiply, &
-        dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type
    USE dbt_api,                         ONLY: dbt_destroy,&
                                               dbt_type
    USE dgemm_counter_types,             ONLY: dgemm_counter_start,&
@@ -412,8 +412,8 @@ CONTAINS
       CALL cp_fm_to_fm(mo_coeff, fm_mo_coeff_occ)
 
       ! set all virtual MO coeffs to zero
-      DO irow_global = 1, nmo
-         DO icol_global = homo + 1, nmo
+      DO icol_global = homo + 1, nmo
+         DO irow_global = 1, nmo
             CALL cp_fm_set_element(fm_mo_coeff_occ, irow_global, icol_global, 0.0_dp)
          END DO
       END DO
@@ -423,8 +423,8 @@ CONTAINS
       CALL cp_fm_to_fm(mo_coeff, fm_mo_coeff_virt)
 
       ! set all occupied MO coeffs to zero
-      DO irow_global = 1, nmo
-         DO icol_global = 1, homo
+      DO icol_global = 1, homo
+         DO irow_global = 1, nmo
             CALL cp_fm_set_element(fm_mo_coeff_virt, irow_global, icol_global, 0.0_dp)
          END DO
       END DO
@@ -520,8 +520,8 @@ CONTAINS
 
       ! Start to allocate the new full matrix
       ALLOCATE (fm_mat_L(SIZE(fm_matrix_Minv_L_kpoints, 1), SIZE(fm_matrix_Minv_L_kpoints, 2)))
-      DO ikp = 1, SIZE(fm_matrix_Minv_L_kpoints, 1)
-         DO j_size = 1, SIZE(fm_matrix_Minv_L_kpoints, 2)
+      DO j_size = 1, SIZE(fm_matrix_Minv_L_kpoints, 2)
+         DO ikp = 1, SIZE(fm_matrix_Minv_L_kpoints, 1)
             IF (do_kpoints) THEN
                IF (ikp == first_ikp_local .OR. ikp_local == -1) THEN
                   CALL cp_fm_create(fm_mat_L(ikp, j_size), fm_struct_sub_kp)
@@ -557,8 +557,8 @@ CONTAINS
       ! For k-points copy matrices of your group
       ! Without kpoints, transpose matrix
       ! without kpoints, the size of fm_mat_L is 1x1. with kpoints, the size is N_kpoints x 2 (2 for real/complex)
-      DO ikp = 1, SIZE(fm_matrix_Minv_L_kpoints, 1)
       DO j_size = 1, SIZE(fm_matrix_Minv_L_kpoints, 2)
+      DO ikp = 1, SIZE(fm_matrix_Minv_L_kpoints, 1)
          IF (do_kpoints) THEN
             IF (ikp_local == ikp .OR. ikp_local == -1) THEN
                CALL cp_fm_copy_general(fm_matrix_Minv_L_kpoints(ikp, j_size), fm_mat_L_transposed, para_env)
@@ -636,10 +636,8 @@ CONTAINS
 !> \param fm_mat_S ...
 !> \param do_ri_sos_laplace_mp2 ...
 !> \param first_cycle ...
-!> \param iter_sc_GW0 ...
 !> \param virtual ...
 !> \param Eigenval ...
-!> \param Eigenval_scf ...
 !> \param homo ...
 !> \param omega ...
 !> \param omega_old ...
@@ -653,15 +651,17 @@ CONTAINS
 !> \param do_bse ...
 !> \param fm_mat_Q_static_bse_gemm ...
 !> \param dgemm_counter ...
+!> \param num_integ_points ...
+!> \param count_ev_sc_GW ...
 ! **************************************************************************************************
-   SUBROUTINE calc_mat_Q(fm_mat_S, do_ri_sos_laplace_mp2, first_cycle, iter_sc_GW0, virtual, &
-                         Eigenval, Eigenval_scf, &
-                         homo, omega, omega_old, jquad, mm_style, dimen_RI, dimen_ia, alpha, fm_mat_Q, fm_mat_Q_gemm, &
-                         do_bse, fm_mat_Q_static_bse_gemm, dgemm_counter)
+   SUBROUTINE calc_mat_Q(fm_mat_S, do_ri_sos_laplace_mp2, first_cycle, virtual, &
+                         Eigenval, homo, omega, omega_old, jquad, mm_style, dimen_RI, dimen_ia, alpha, fm_mat_Q, fm_mat_Q_gemm, &
+                         do_bse, fm_mat_Q_static_bse_gemm, dgemm_counter, &
+                         num_integ_points, count_ev_sc_GW)
       TYPE(cp_fm_type), INTENT(IN)                       :: fm_mat_S
       LOGICAL, INTENT(IN)                                :: do_ri_sos_laplace_mp2, first_cycle
-      INTEGER, INTENT(IN)                                :: iter_sc_GW0, virtual
-      REAL(KIND=dp), DIMENSION(:), INTENT(IN)            :: Eigenval, Eigenval_scf
+      INTEGER, INTENT(IN)                                :: virtual
+      REAL(KIND=dp), DIMENSION(:), INTENT(IN)            :: Eigenval
       INTEGER, INTENT(IN)                                :: homo
       REAL(KIND=dp), INTENT(IN)                          :: omega, omega_old
       INTEGER, INTENT(IN)                                :: jquad, mm_style, dimen_RI, dimen_ia
@@ -670,6 +670,7 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: do_bse
       TYPE(cp_fm_type), INTENT(IN)                       :: fm_mat_Q_static_bse_gemm
       TYPE(dgemm_counter_type), INTENT(INOUT)            :: dgemm_counter
+      INTEGER, INTENT(IN)                                :: num_integ_points, count_ev_sc_GW
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'calc_mat_Q'
 
@@ -681,19 +682,17 @@ CONTAINS
          ! the first index of tau_tj starts with 0 (see mp2_weights)
          CALL calc_fm_mat_S_laplace(fm_mat_S, homo, virtual, Eigenval, omega - omega_old)
       ELSE
-         IF (iter_sc_GW0 == 1) THEN
-            CALL calc_fm_mat_S_rpa(fm_mat_S, first_cycle, virtual, Eigenval, &
-                                   homo, omega, omega_old)
-         ELSE
-            CALL calc_fm_mat_S_rpa(fm_mat_S, first_cycle, virtual, Eigenval_scf, &
-                                   homo, omega, omega_old)
-         END IF
+         CALL calc_fm_mat_S_rpa(fm_mat_S, first_cycle, virtual, Eigenval, &
+                                homo, omega, omega_old)
       END IF
 
       CALL contract_S_to_Q(mm_style, dimen_RI, dimen_ia, alpha, fm_mat_S, fm_mat_Q_gemm, &
                            fm_mat_Q, dgemm_counter)
-
-      IF (do_bse .AND. jquad == 1) THEN
+      ! fm_mat_Q_static_bse_gemm does not enter W_ijab (A matrix in TDA), but only full ABBA
+      ! (since only B_ij_bar enters W_ijab)
+      ! Changing jquad, since omega=0 is at last idx
+      ! We enforce W0 for BSE in case of evGW
+      IF (do_bse .AND. jquad == num_integ_points .AND. count_ev_sc_GW == 1) THEN
          CALL cp_fm_to_fm(fm_mat_Q_gemm, fm_mat_Q_static_bse_gemm)
       END IF
       CALL timestop(handle)
@@ -784,8 +783,8 @@ CONTAINS
       IF (first_cycle) THEN
          ! In this case just update the matrix (symmetric form) with
          ! SQRT((epsi_a-epsi_i)/((epsi_a-epsi_i)**2+omega**2))
-!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(iiB,iocc,avirt,eigen_diff,i_global) &
-!$OMP             SHARED(ncol_local,col_indices,Eigenval,fm_mat_S,virtual,homo,omega)
+         !$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(iiB,iocc,avirt,eigen_diff,i_global) &
+         !$OMP             SHARED(ncol_local,col_indices,Eigenval,fm_mat_S,virtual,homo,omega)
          DO iiB = 1, ncol_local
             i_global = col_indices(iiB)
 
@@ -800,8 +799,8 @@ CONTAINS
       ELSE
          ! In this case the update has to remove the old omega component thus
          ! SQRT(((epsi_a-epsi_i)**2+omega_old**2)/((epsi_a-epsi_i)**2+omega**2))
-!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(iiB,iocc,avirt,eigen_diff,i_global) &
-!$OMP             SHARED(ncol_local,col_indices,Eigenval,fm_mat_S,virtual,homo,omega,omega_old)
+         !$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(iiB,iocc,avirt,eigen_diff,i_global) &
+         !$OMP             SHARED(ncol_local,col_indices,Eigenval,fm_mat_S,virtual,homo,omega,omega_old)
          DO iiB = 1, ncol_local
             i_global = col_indices(iiB)
 
@@ -847,7 +846,7 @@ CONTAINS
       CALL dgemm_counter_start(dgemm_counter)
       SELECT CASE (mm_style)
       CASE (wfc_mm_style_gemm)
-         ! waste-fully computes the full symmetrix matrix, but maybe faster than cp_fm_syrk for optimized cp_fm_gemm
+         ! waste-fully computes the full symmetrix matrix, but maybe faster than cp_fm_syrk for optimized cp_fm_gemm !!!
          CALL parallel_gemm(transa="N", transb="T", m=dimen_RI, n=dimen_RI, k=dimen_ia, alpha=alpha, &
                             matrix_a=fm_mat_S, matrix_b=fm_mat_S, beta=0.0_dp, &
                             matrix_c=fm_mat_Q_gemm)
@@ -874,20 +873,19 @@ CONTAINS
 !> \param dimen_RI ...
 !> \param trace_Qomega ...
 !> \param fm_mat_Q ...
-!> \param para_env_RPA ...
 ! **************************************************************************************************
-   SUBROUTINE Q_trace_and_add_unit_matrix(dimen_RI, trace_Qomega, fm_mat_Q, para_env_RPA)
+   SUBROUTINE Q_trace_and_add_unit_matrix(dimen_RI, trace_Qomega, fm_mat_Q)
 
       INTEGER, INTENT(IN)                                :: dimen_RI
       REAL(KIND=dp), DIMENSION(dimen_RI), INTENT(OUT)    :: trace_Qomega
       TYPE(cp_fm_type), INTENT(IN)                       :: fm_mat_Q
-      TYPE(mp_para_env_type), INTENT(IN)                 :: para_env_RPA
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'Q_trace_and_add_unit_matrix'
 
       INTEGER                                            :: handle, i_global, iiB, j_global, jjB, &
                                                             ncol_local, nrow_local
       INTEGER, DIMENSION(:), POINTER                     :: col_indices, row_indices
+      TYPE(mp_para_env_type), POINTER                    :: para_env
 
       CALL timeset(routineN, handle)
 
@@ -895,7 +893,8 @@ CONTAINS
                           nrow_local=nrow_local, &
                           ncol_local=ncol_local, &
                           row_indices=row_indices, &
-                          col_indices=col_indices)
+                          col_indices=col_indices, &
+                          para_env=para_env)
 
       ! calculate the trace of Q and add 1 on the diagonal
       trace_Qomega = 0.0_dp
@@ -911,7 +910,7 @@ CONTAINS
             END IF
          END DO
       END DO
-      CALL para_env_RPA%sum(trace_Qomega)
+      CALL para_env%sum(trace_Qomega)
 
       CALL timestop(handle)
 
@@ -953,7 +952,7 @@ CONTAINS
 
       ! calculate Trace(Log(Matrix)) as Log(DET(Matrix)) via cholesky decomposition
       CALL cp_fm_cholesky_decompose(matrix=fm_mat_Q, n=dimen_RI, info_out=info_chol)
-      IF (info_chol .NE. 0) THEN
+      IF (info_chol /= 0) THEN
          CALL cp_warn(__LOCATION__, &
                       "The Cholesky decomposition before inverting the RPA matrix / dielectric "// &
                       "function failed. "// &
@@ -1208,8 +1207,8 @@ CONTAINS
          DEALLOCATE (mat_P_omega)
       END IF
 
-      DO i_size = 1, SIZE(t_3c_O, 1)
-         DO j_size = 1, SIZE(t_3c_O, 2)
+      DO j_size = 1, SIZE(t_3c_O, 2)
+         DO i_size = 1, SIZE(t_3c_O, 1)
             CALL dbt_destroy(t_3c_O(i_size, j_size))
          END DO
       END DO
@@ -1229,9 +1228,9 @@ CONTAINS
       cut_memory = SIZE(t_3c_O_compressed, 3)
 
       DEALLOCATE (t_3c_O_ind)
-      DO i_size = 1, SIZE(t_3c_O_compressed, 1)
+      DO i_mem = 1, cut_memory
          DO j_size = 1, SIZE(t_3c_O_compressed, 2)
-            DO i_mem = 1, cut_memory
+            DO i_size = 1, SIZE(t_3c_O_compressed, 1)
                CALL dealloc_containers(t_3c_O_compressed(i_size, j_size, i_mem), unused)
             END DO
          END DO
@@ -1265,9 +1264,10 @@ CONTAINS
    SUBROUTINE contract_P_omega_with_mat_L(mat_P_omega, mat_L, mat_work, eps_filter_im_time, fm_mat_work, dimen_RI, &
                                           dimen_RI_red, fm_mat_L, fm_mat_Q)
 
-      TYPE(dbcsr_type), POINTER                          :: mat_P_omega, mat_L, mat_work
+      TYPE(dbcsr_type), INTENT(IN)                       :: mat_P_omega, mat_L
+      TYPE(dbcsr_type), INTENT(INOUT)                    :: mat_work
       REAL(KIND=dp), INTENT(IN)                          :: eps_filter_im_time
-      TYPE(cp_fm_type), INTENT(IN)                       :: fm_mat_work
+      TYPE(cp_fm_type), INTENT(INOUT)                    :: fm_mat_work
       INTEGER, INTENT(IN)                                :: dimen_RI, dimen_RI_red
       TYPE(cp_fm_type), INTENT(IN)                       :: fm_mat_L, fm_mat_Q
 

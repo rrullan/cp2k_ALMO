@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,10 +12,10 @@
 !> \author JGH
 ! **************************************************************************************************
 MODULE exstates_types
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE input_constants,                 ONLY: xc_kernel_method_best
    USE input_section_types,             ONLY: section_vals_type,&
                                               section_vals_val_get
@@ -38,11 +38,11 @@ MODULE exstates_types
 ! *****************************************************************************
 
    TYPE wfn_history_type
-      INTEGER                                            :: state
-      REAL(KIND=dp)                                      :: evalue
+      INTEGER                                            :: state = -1
+      REAL(KIND=dp)                                      :: evalue = 0.0_dp
       TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: evect => NULL()
       TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: cpmos => NULL()
-      REAL(KIND=dp)                                      :: xsval, gsval, gsmin
+      REAL(KIND=dp)                                      :: xsval = 0.0_dp, gsval = 0.0_dp, gsmin = 0.0_dp
    END TYPE wfn_history_type
 
 ! *****************************************************************************
@@ -52,11 +52,11 @@ MODULE exstates_types
 !> \author JGH
 ! *****************************************************************************
    TYPE excited_energy_type
-      INTEGER                                            :: state
-      REAL(KIND=dp)                                      :: evalue
-      INTEGER                                            :: xc_kernel_method
+      INTEGER                                            :: state = -1
+      REAL(KIND=dp)                                      :: evalue = 0.0_dp
+      INTEGER                                            :: xc_kernel_method = -1
       REAL(KIND=dp)                                      :: eps_delta_rho = 1.E-02_dp
-      INTEGER                                            :: diff_order
+      INTEGER                                            :: diff_order = -1
       LOGICAL                                            :: debug_forces = .FALSE.
       TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: evect => NULL()
       TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: cpmos => NULL()
@@ -68,13 +68,18 @@ MODULE exstates_types
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_px1_asymm => NULL()
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_px1_admm_asymm => NULL()
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_wx1 => NULL()
-      TYPE(pw_r3d_rs_type)                                      :: vh_rspace
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER               :: vxc_rspace => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER               :: vtau_rspace => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER               :: vadmm_rspace => NULL()
+      TYPE(pw_r3d_rs_type)                               :: vh_rspace = pw_r3d_rs_type()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: vxc_rspace => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: vtau_rspace => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: vadmm_rspace => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: vadmm_tau_rspace => NULL()
       TYPE(local_rho_type), POINTER                      :: local_rho_set => NULL()
       TYPE(local_rho_type), POINTER                      :: local_rho_set_admm => NULL()
-      TYPE(wfn_history_type)                             :: wfn_history
+      TYPE(wfn_history_type)                             :: wfn_history = wfn_history_type()
+      TYPE(cp_fm_type), POINTER, DIMENSION(:, :)         :: bse_w_matrix_MO => NULL()
+      TYPE(cp_fm_type), POINTER, DIMENSION(:, :)         :: bse_a_matrix_MO => NULL()
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: gw_eigen
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks => NULL()
    END TYPE excited_energy_type
 
 CONTAINS
@@ -91,12 +96,18 @@ CONTAINS
          CALL cp_fm_release(ex_env%evect)
          CALL cp_fm_release(ex_env%cpmos)
          !
+         CALL cp_fm_release(ex_env%bse_w_matrix_MO)
+         CALL cp_fm_release(ex_env%bse_a_matrix_MO)
+         !
          CALL exstate_matrix_release(ex_env)
          !
          CALL exstate_potential_release(ex_env)
          !
          CALL cp_fm_release(ex_env%wfn_history%evect)
          CALL cp_fm_release(ex_env%wfn_history%cpmos)
+
+         IF (ALLOCATED(ex_env%gw_eigen)) &
+            DEALLOCATE (ex_env%gw_eigen)
 
          DEALLOCATE (ex_env)
 
@@ -112,6 +123,8 @@ CONTAINS
       TYPE(excited_energy_type), POINTER                 :: ex_env
 
       IF (ASSOCIATED(ex_env)) THEN
+         IF (ASSOCIATED(ex_env%matrix_ks)) CALL dbcsr_deallocate_matrix_set(ex_env%matrix_ks)
+         NULLIFY (ex_env%matrix_ks)
          IF (ASSOCIATED(ex_env%matrix_pe)) CALL dbcsr_deallocate_matrix_set(ex_env%matrix_pe)
          NULLIFY (ex_env%matrix_pe)
          IF (ASSOCIATED(ex_env%matrix_hz)) CALL dbcsr_deallocate_matrix_set(ex_env%matrix_hz)
@@ -166,6 +179,13 @@ CONTAINS
             DEALLOCATE (ex_env%vadmm_rspace)
             NULLIFY (ex_env%vadmm_rspace)
          END IF
+         IF (ASSOCIATED(ex_env%vadmm_tau_rspace)) THEN
+            DO iab = 1, SIZE(ex_env%vadmm_tau_rspace)
+               CALL ex_env%vadmm_tau_rspace(iab)%release()
+            END DO
+            DEALLOCATE (ex_env%vadmm_tau_rspace)
+            NULLIFY (ex_env%vadmm_tau_rspace)
+         END IF
          IF (ASSOCIATED(ex_env%local_rho_set)) THEN
             CALL local_rho_set_release(ex_env%local_rho_set)
             NULLIFY (ex_env%local_rho_set)
@@ -196,6 +216,9 @@ CONTAINS
       ALLOCATE (ex_env)
       ex_env%evalue = 0.0_dp
       NULLIFY (ex_env%evect)
+      NULLIFY (ex_env%cpmos)
+      NULLIFY (ex_env%bse_w_matrix_MO)
+      NULLIFY (ex_env%bse_a_matrix_MO)
       IF (excited_state) THEN
          CALL section_vals_val_get(dft_section, "EXCITED_STATES%STATE", i_val=ex_env%state)
          CALL section_vals_val_get(dft_section, "EXCITED_STATES%XC_KERNEL_METHOD", &

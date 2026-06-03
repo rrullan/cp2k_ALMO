@@ -1,15 +1,27 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: GPL-2.0-or-later                                 */
 /*----------------------------------------------------------------------------*/
 
 #if defined(__LIBTORCH)
 
+#include <c10/core/DeviceGuard.h>
 #include <torch/csrc/api/include/torch/cuda.h>
 #include <torch/script.h>
 
+#include "offload/offload_library.h"
+
+#include <cassert>
+
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+typedef torch::Tensor torch_c_tensor_t;
 typedef c10::Dict<std::string, torch::Tensor> torch_c_dict_t;
 typedef torch::jit::Module torch_c_model_t;
 
@@ -17,34 +29,128 @@ typedef torch::jit::Module torch_c_model_t;
  * \brief Internal helper for selecting the CUDA device when available.
  * \author Ole Schuett
  ******************************************************************************/
+static bool use_cuda_if_available = true;
+
 static torch::Device get_device() {
-  return (torch::cuda::is_available()) ? torch::kCUDA : torch::kCPU;
+  if (!use_cuda_if_available || !torch::cuda::is_available()) {
+    return torch::kCPU;
+  }
+  const auto device_count = torch::cuda::device_count();
+  if (device_count <= 0) {
+    return torch::kCPU;
+  }
+  const int chosen_device = offload_get_chosen_device();
+  const int device = (chosen_device >= 0) ? chosen_device : 0;
+  assert(device < device_count);
+  return torch::Device(torch::kCUDA, device);
+}
+
+static torch::Device get_device_with_guard(c10::OptionalDeviceGuard &guard) {
+  const auto device = get_device();
+  if (device.is_cuda()) {
+    guard.reset_device(device);
+  }
+  return device;
+}
+
+static void set_jit_fusion_strategy() {
+  // JIT Fusion strategy optimization, hardcode dynamic 10, see also
+  // https://github.com/mir-group/pair_nequip_allegro.git
+  torch::jit::FusionStrategy strategy = {
+      {torch::jit::FusionBehavior::DYNAMIC, 10}};
+  torch::jit::setFusionStrategy(strategy);
+}
+
+static void copy_string_to_c_buffer(const std::string &source, char **content,
+                                    int *length) {
+  *length = source.length();
+  *content = (char *)malloc(source.length() + 1); // +1 for null terminator
+  strcpy(*content, source.c_str());
+}
+
+static bool can_load_directly_to_device(const torch::Device &device) {
+  return !device.is_cuda() || device.index() == 0 ||
+         torch::cuda::device_count() == 1;
+}
+
+static torch::jit::Module load_module_for_device(const char *filename,
+                                                 const torch::Device &device) {
+  if (can_load_directly_to_device(device)) {
+    return torch::jit::load(filename, device);
+  }
+  auto model = torch::jit::load(filename, torch::kCPU);
+  model.to(device);
+  return model;
 }
 
 /*******************************************************************************
- * \brief Internal helper for retrieving arrays from Torch dictionary.
+ * \brief Internal helper for creating a Torch tensor from an array.
  * \author Ole Schuett
  ******************************************************************************/
-template <typename T>
-static void torch_c_dict_get(const torch_c_dict_t *dict, const char *key,
-                             const int ndims, int64_t sizes[], T **dest) {
+static torch_c_tensor_t *tensor_from_array(const torch::Dtype dtype,
+                                           const bool req_grad, const int ndims,
+                                           const int64_t sizes[],
+                                           void *source) {
+  const auto opts = torch::TensorOptions().dtype(dtype).requires_grad(req_grad);
+  const auto sizes_ref = c10::IntArrayRef(sizes, ndims);
+  return new torch_c_tensor_t(torch::from_blob(source, sizes_ref, opts));
+}
 
-  assert(dict->contains(key));
-  const torch::Tensor tensor = dict->at(key).cpu();
-
-  assert(tensor.ndimension() == ndims);
-  int64_t size_flat = 1;
+static bool tensor_matches(const torch_c_tensor_t *tensor,
+                           const torch::Dtype dtype,
+                           const torch::Device &device, const int ndims,
+                           const int64_t sizes[]) {
+  if (tensor == nullptr || !tensor->defined() ||
+      tensor->scalar_type() != dtype || tensor->device() != device ||
+      tensor->ndimension() != ndims) {
+    return false;
+  }
   for (int i = 0; i < ndims; i++) {
-    sizes[i] = tensor.size(i);
-    size_flat *= sizes[i];
+    if (tensor->size(i) != sizes[i]) {
+      return false;
+    }
   }
-  *dest = (T *)malloc(size_flat * sizeof(T));
+  return tensor->is_contiguous();
+}
 
-  const torch::Tensor tensor_flat = tensor.flatten();
-  const auto accessor = tensor_flat.accessor<T, 1>();
-  for (int i = 0; i < size_flat; i++) {
-    (*dest)[i] = accessor[i];
+static void reset_tensor_from_array_double(torch_c_tensor_t **tensor,
+                                           const bool req_grad, const int ndims,
+                                           const int64_t sizes[],
+                                           double source[]) {
+  c10::OptionalDeviceGuard guard;
+  const auto device = get_device_with_guard(guard);
+  const auto sizes_ref = c10::IntArrayRef(sizes, ndims);
+  if (!tensor_matches(*tensor, torch::kFloat64, device, ndims, sizes)) {
+    delete (*tensor);
+    const auto opts =
+        torch::TensorOptions().dtype(torch::kFloat64).device(device);
+    *tensor = new torch_c_tensor_t(torch::empty(sizes_ref, opts).detach());
   }
+  const auto source_tensor = torch::from_blob(
+      source, sizes_ref, torch::TensorOptions().dtype(torch::kFloat64));
+  {
+    torch::NoGradGuard no_grad;
+    (*tensor)->copy_(source_tensor);
+    (*tensor)->mutable_grad() = torch::Tensor();
+  }
+  (*tensor)->set_requires_grad(req_grad);
+}
+
+/*******************************************************************************
+ * \brief Internal helper for getting the data_ptr and sizes of a Torch tensor.
+ * \author Ole Schuett
+ ******************************************************************************/
+static void *get_data_ptr(const torch_c_tensor_t *tensor,
+                          const torch::Dtype dtype, const int ndims,
+                          int64_t sizes[]) {
+  assert(tensor->scalar_type() == dtype);
+  assert(tensor->ndimension() == ndims);
+  for (int i = 0; i < ndims; i++) {
+    sizes[i] = tensor->size(i);
+  }
+
+  assert(tensor->is_contiguous());
+  return tensor->data_ptr();
 };
 
 #ifdef __cplusplus
@@ -52,79 +158,165 @@ extern "C" {
 #endif
 
 /*******************************************************************************
- * \brief Inserts array of floats into Torch dictionary.
- *        The passed array has to outlive the dictionary!
+ * \brief Creates a Torch tensor from an array of int32s.
+ *        The passed array has to outlive the tensor!
  * \author Ole Schuett
  ******************************************************************************/
-void torch_c_dict_insert_float(torch_c_dict_t *dict, const char *key,
-                               const int ndims, const int64_t sizes[],
-                               float source[]) {
-  const auto options = torch::TensorOptions().dtype(torch::kFloat32);
-  const auto sizes_ref = c10::IntArrayRef(sizes, ndims);
-  const torch::Tensor tensor = torch::from_blob(source, sizes_ref, options);
-  dict->insert(key, tensor.to(get_device()));
+void torch_c_tensor_from_array_int32(torch_c_tensor_t **tensor,
+                                     const bool req_grad, const int ndims,
+                                     const int64_t sizes[], int32_t source[]) {
+  *tensor = tensor_from_array(torch::kInt32, req_grad, ndims, sizes, source);
 }
 
 /*******************************************************************************
- * \brief Inserts array of int64s into Torch dictionary.
- *        The passed array has to outlive the dictionary!
+ * \brief Creates a Torch tensor from an array of floats.
+ *        The passed array has to outlive the tensor!
  * \author Ole Schuett
  ******************************************************************************/
-void torch_c_dict_insert_int64(torch_c_dict_t *dict, const char *key,
-                               const int ndims, const int64_t sizes[],
-                               int64_t source[]) {
-  const auto options = torch::TensorOptions().dtype(torch::kInt64);
-  const auto sizes_ref = c10::IntArrayRef(sizes, ndims);
-  const torch::Tensor tensor = torch::from_blob(source, sizes_ref, options);
-  dict->insert(key, tensor.to(get_device()));
+void torch_c_tensor_from_array_float(torch_c_tensor_t **tensor,
+                                     const bool req_grad, const int ndims,
+                                     const int64_t sizes[], float source[]) {
+  *tensor = tensor_from_array(torch::kFloat32, req_grad, ndims, sizes, source);
 }
 
 /*******************************************************************************
- * \brief Inserts array of doubles into Torch dictionary.
- *        The passed array has to outlive the dictionary!
+ * \brief Creates a Torch tensor from an array of int64s.
+ *        The passed array has to outlive the tensor!
  * \author Ole Schuett
  ******************************************************************************/
-void torch_c_dict_insert_double(torch_c_dict_t *dict, const char *key,
-                                const int ndims, const int64_t sizes[],
-                                double source[]) {
-  const auto options = torch::TensorOptions().dtype(torch::kFloat64);
-  const auto sizes_ref = c10::IntArrayRef(sizes, ndims);
-  const torch::Tensor tensor = torch::from_blob(source, sizes_ref, options);
-  dict->insert(key, tensor.to(get_device()));
+void torch_c_tensor_from_array_int64(torch_c_tensor_t **tensor,
+                                     const bool req_grad, const int ndims,
+                                     const int64_t sizes[], int64_t source[]) {
+  *tensor = tensor_from_array(torch::kInt64, req_grad, ndims, sizes, source);
 }
 
 /*******************************************************************************
- * \brief Retrieves array of floats from Torch dictionary.
- *        The returned array has to be deallocated by caller!
+ * \brief Creates a Torch tensor from an array of doubles.
+ *        The passed array has to outlive the tensor!
  * \author Ole Schuett
  ******************************************************************************/
-void torch_c_dict_get_float(const torch_c_dict_t *dict, const char *key,
-                            const int ndims, int64_t sizes[], float **dest) {
-
-  torch_c_dict_get<float>(dict, key, ndims, sizes, dest);
+void torch_c_tensor_from_array_double(torch_c_tensor_t **tensor,
+                                      const bool req_grad, const int ndims,
+                                      const int64_t sizes[], double source[]) {
+  *tensor = tensor_from_array(torch::kFloat64, req_grad, ndims, sizes, source);
 }
 
 /*******************************************************************************
- * \brief Retrieves array of int64s from Torch dictionary.
- *        The returned array has to be deallocated by caller!
- * \author Ole Schuett
+ * \brief Releases a string returned from the Torch C API.
  ******************************************************************************/
-void torch_c_dict_get_int64(const torch_c_dict_t *dict, const char *key,
-                            const int ndims, int64_t sizes[], int64_t **dest) {
+void torch_c_free_string(char *content) { free(content); }
 
-  torch_c_dict_get<int64_t>(dict, key, ndims, sizes, dest);
+/*******************************************************************************
+ * \brief Reuses or creates a device tensor and copies double data into it.
+ ******************************************************************************/
+void torch_c_tensor_reset_from_array_double(torch_c_tensor_t **tensor,
+                                            const bool req_grad,
+                                            const int ndims,
+                                            const int64_t sizes[],
+                                            double source[]) {
+  reset_tensor_from_array_double(tensor, req_grad, ndims, sizes, source);
 }
 
 /*******************************************************************************
- * \brief Retrieves array of doubles from Torch dictionary.
- *        The returned array has to be deallocated by caller!
+ * \brief Returns the data_ptr and sizes of a Torch tensor of int32s.
+ *        The returned pointer is only valide during the tensor's live time!
  * \author Ole Schuett
  ******************************************************************************/
-void torch_c_dict_get_double(const torch_c_dict_t *dict, const char *key,
-                             const int ndims, int64_t sizes[], double **dest) {
-
-  torch_c_dict_get<double>(dict, key, ndims, sizes, dest);
+void torch_c_tensor_data_ptr_int32(const torch_c_tensor_t *tensor,
+                                   const int ndims, int64_t sizes[],
+                                   int32_t **data_ptr) {
+  *data_ptr = (int32_t *)get_data_ptr(tensor, torch::kInt32, ndims, sizes);
 }
+
+/*******************************************************************************
+ * \brief Returns the data_ptr and sizes of a Torch tensor of floats.
+ *        The returned pointer is only valide during the tensor's lifetime!
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_tensor_data_ptr_float(const torch_c_tensor_t *tensor,
+                                   const int ndims, int64_t sizes[],
+                                   float **data_ptr) {
+  *data_ptr = (float *)get_data_ptr(tensor, torch::kFloat32, ndims, sizes);
+}
+
+/*******************************************************************************
+ * \brief Returns the data_ptr and sizes of a Torch tensor of int64s.
+ *        The returned pointer is only valide during the tensor's live time!
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_tensor_data_ptr_int64(const torch_c_tensor_t *tensor,
+                                   const int ndims, int64_t sizes[],
+                                   int64_t **data_ptr) {
+  *data_ptr = (int64_t *)get_data_ptr(tensor, torch::kInt64, ndims, sizes);
+}
+
+/*******************************************************************************
+ * \brief Returns the data_ptr and sizes of a Torch tensor of doubles.
+ *        The returned pointer is only valide during the tensor's live time!
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_tensor_data_ptr_double(const torch_c_tensor_t *tensor,
+                                    const int ndims, int64_t sizes[],
+                                    double **data_ptr) {
+  *data_ptr = (double *)get_data_ptr(tensor, torch::kFloat64, ndims, sizes);
+}
+
+/*******************************************************************************
+ * \brief Runs autograd on a Torch tensor.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_tensor_backward(const torch_c_tensor_t *tensor,
+                             const torch_c_tensor_t *outer_grad) {
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
+  tensor->backward(*outer_grad);
+}
+
+/*******************************************************************************
+ * \brief Runs autograd on a scalar Torch tensor.
+ ******************************************************************************/
+void torch_c_tensor_backward_scalar(const torch_c_tensor_t *tensor) {
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
+  tensor->backward();
+}
+
+/*******************************************************************************
+ * \brief Moves a tensor to the active device and makes it an autograd leaf.
+ ******************************************************************************/
+void torch_c_tensor_to_device_leaf(torch_c_tensor_t **tensor,
+                                   const bool req_grad) {
+  c10::OptionalDeviceGuard guard;
+  const auto device = get_device_with_guard(guard);
+  auto moved = (*tensor)->to(device).detach();
+  moved.set_requires_grad(req_grad);
+  delete (*tensor);
+  *tensor = new torch_c_tensor_t(moved);
+}
+
+/*******************************************************************************
+ * \brief Select whether Torch wrappers should use CUDA when available.
+ ******************************************************************************/
+void torch_c_use_cuda(const bool use_cuda) { use_cuda_if_available = use_cuda; }
+
+/*******************************************************************************
+ * \brief Returns the gradient of a Torch tensor which was computed by autograd.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_tensor_grad(const torch_c_tensor_t *tensor,
+                         torch_c_tensor_t **grad) {
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
+  const torch::Tensor maybe_grad = tensor->grad();
+  assert(maybe_grad.defined());
+  *grad = new torch_c_tensor_t(maybe_grad.cpu().contiguous());
+}
+
+/*******************************************************************************
+ * \brief Releases a Torch tensor and all its ressources.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_tensor_release(torch_c_tensor_t *tensor) { delete (tensor); }
 
 /*******************************************************************************
  * \brief Creates an empty Torch dictionary.
@@ -133,6 +325,39 @@ void torch_c_dict_get_double(const torch_c_dict_t *dict, const char *key,
 void torch_c_dict_create(torch_c_dict_t **dict_out) {
   assert(*dict_out == NULL);
   *dict_out = new c10::Dict<std::string, torch::Tensor>();
+}
+
+/*******************************************************************************
+ * \brief Clones a Torch dictionary.
+ ******************************************************************************/
+void torch_c_dict_clone(const torch_c_dict_t *dict, torch_c_dict_t **dict_out) {
+  assert(*dict_out == NULL);
+  torch_c_dict_t *clone = new c10::Dict<std::string, torch::Tensor>();
+  for (const auto &entry : *dict) {
+    clone->insert(entry.key(), entry.value());
+  }
+  *dict_out = clone;
+}
+
+/*******************************************************************************
+ * \brief Inserts a Torch tensor into a Torch dictionary.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_dict_insert(const torch_c_dict_t *dict, const char *key,
+                         const torch_c_tensor_t *tensor) {
+  c10::OptionalDeviceGuard guard;
+  const auto device = get_device_with_guard(guard);
+  dict->insert(key, tensor->to(device));
+}
+
+/*******************************************************************************
+ * \brief Retrieves a Torch tensor from a Torch dictionary.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_dict_get(const torch_c_dict_t *dict, const char *key,
+                      torch_c_tensor_t **tensor) {
+  assert(dict->contains(key));
+  *tensor = new torch_c_tensor_t(dict->at(key).cpu().contiguous());
 }
 
 /*******************************************************************************
@@ -147,29 +372,68 @@ void torch_c_dict_release(torch_c_dict_t *dict) { delete (dict); }
  * \author Ole Schuett
  ******************************************************************************/
 void torch_c_model_load(torch_c_model_t **model_out, const char *filename) {
-
-  torch::jit::Module *model = new torch::jit::Module();
-  *model = torch::jit::load(filename, get_device());
-  model->eval();
-
   assert(*model_out == NULL);
+  c10::OptionalDeviceGuard guard;
+  const auto device = get_device_with_guard(guard);
+  set_jit_fusion_strategy();
+  torch::jit::Module *model = new torch::jit::Module();
+  *model = load_module_for_device(filename, device);
+  model->eval(); // Set to evaluation mode to disable gradients, drop-out, etc.
   *model_out = model;
 }
 
 /*******************************************************************************
  * \brief Evaluates the given Torch model.
- *        In Torch lingo this operation is called forward().
  * \author Ole Schuett
  ******************************************************************************/
-void torch_c_model_eval(torch_c_model_t *model, const torch_c_dict_t *inputs,
-                        torch_c_dict_t *outputs) {
+void torch_c_model_forward(torch_c_model_t *model, const torch_c_dict_t *inputs,
+                           torch_c_dict_t *outputs) {
 
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
   auto untyped_output = model->forward({*inputs}).toGenericDict();
-
   outputs->clear();
   for (const auto &entry : untyped_output) {
     outputs->insert(entry.key().toStringView(), entry.value().toTensor());
   }
+}
+
+/*******************************************************************************
+ * \brief Evaluates a TorchScript model method expecting keyword argument "mol".
+ ******************************************************************************/
+void torch_c_model_forward_mol_tensor(torch_c_model_t *model,
+                                      const char *method_name,
+                                      const torch_c_dict_t *inputs,
+                                      torch_c_tensor_t **output) {
+
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
+  std::vector<c10::IValue> args;
+  std::unordered_map<std::string, c10::IValue> kwargs;
+  kwargs["mol"] = *inputs;
+  *output = new torch_c_tensor_t(
+      model->get_method(method_name)(args, kwargs).toTensor());
+}
+
+/*******************************************************************************
+ * \brief Returns the weighted sum of two Torch tensors.
+ ******************************************************************************/
+void torch_c_tensor_weighted_sum(const torch_c_tensor_t *values,
+                                 const torch_c_tensor_t *weights,
+                                 torch_c_tensor_t **result) {
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
+  const auto weights_on_device = weights->to(values->device());
+  *result = new torch_c_tensor_t((*values * weights_on_device).sum());
+}
+
+/*******************************************************************************
+ * \brief Returns a scalar double value from a Torch tensor.
+ ******************************************************************************/
+double torch_c_tensor_item_double(const torch_c_tensor_t *tensor) {
+  c10::OptionalDeviceGuard guard;
+  get_device_with_guard(guard);
+  return tensor->item<double>();
 }
 
 /*******************************************************************************
@@ -190,9 +454,7 @@ void torch_c_model_read_metadata(const char *filename, const char *key,
   std::unordered_map<std::string, std::string> extra_files = {{key, ""}};
   torch::jit::load(filename, torch::kCPU, extra_files);
   const std::string &content_str = extra_files[key];
-  *length = content_str.length();
-  *content = (char *)malloc(content_str.length() + 1); // +1 for null terminator
-  strcpy(*content, content_str.c_str());
+  copy_string_to_c_buffer(content_str, content, length);
 }
 
 /*******************************************************************************
@@ -221,6 +483,61 @@ void torch_c_allow_tf32(const bool allow_tf32) {
 void torch_c_model_freeze(torch_c_model_t *model) {
 
   *model = torch::jit::freeze(*model);
+}
+
+/*******************************************************************************
+ * \brief Retrieves an int64 attribute. Must be called before model freeze.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_model_get_attr_int64(const torch_c_model_t *model, const char *key,
+                                  int64_t *dest) {
+  *dest = model->attr(key).toInt();
+}
+
+/*******************************************************************************
+ * \brief Retrieves a double attribute. Must be called before model freeze.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_model_get_attr_double(const torch_c_model_t *model,
+                                   const char *key, double *dest) {
+  *dest = model->attr(key).toDouble();
+}
+
+/*******************************************************************************
+ * \brief Retrieves a string attribute. Must be called before model freeze.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_model_get_attr_string(const torch_c_model_t *model,
+                                   const char *key, char *dest) {
+  const std::string &str = model->attr(key).toStringRef();
+  assert(str.size() < 80); // default_string_length
+  for (int i = 0; i < str.size(); i++) {
+    dest[i] = str[i];
+  }
+}
+
+/*******************************************************************************
+ * \brief Retrieves a list attribute's size. Must be called before model freeze.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_model_get_attr_list_size(const torch_c_model_t *model,
+                                      const char *key, int *size) {
+  *size = model->attr(key).toList().size();
+}
+
+/*******************************************************************************
+ * \brief Retrieves a single item from a string list attribute.
+ * \author Ole Schuett
+ ******************************************************************************/
+void torch_c_model_get_attr_strlist(const torch_c_model_t *model,
+                                    const char *key, const int index,
+                                    char *dest) {
+  const auto list = model->attr(key).toList();
+  const std::string &str = list[index].toStringRef();
+  assert(str.size() < 80); // default_string_length
+  for (int i = 0; i < str.size(); i++) {
+    dest[i] = str[i];
+  }
 }
 
 #ifdef __cplusplus

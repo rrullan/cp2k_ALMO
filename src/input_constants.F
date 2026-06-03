@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -53,7 +53,8 @@ MODULE input_constants
                                                do_mixed = 6, &
                                                do_embed = 7, &
                                                do_sirius = 8, &
-                                               do_nnp = 9
+                                               do_nnp = 9, &
+                                               do_ipi = 10
 
    ! QMMM
    REAL(KIND=dp), PARAMETER, PUBLIC         :: RADIUS_QMMM_DEFAULT = 0.80_dp, & ! Angstrom
@@ -82,7 +83,12 @@ MODULE input_constants
 
    INTEGER, PARAMETER, PUBLIC               :: do_cell_cp2k = 1, &
                                                do_cell_cif = 2, &
-                                               do_cell_xsc = 3
+                                               do_cell_xsc = 3, &
+                                               do_cell_extxyz = 4, &
+                                               do_cell_pdb = 5
+   INTEGER, PARAMETER, PUBLIC               :: canonicalize_cell_auto = 0, &
+                                               canonicalize_cell_true = 1, &
+                                               canonicalize_cell_false = 2
 
    INTEGER, PARAMETER, PUBLIC               :: rmsd_all = 0, &
                                                rmsd_list = 1, &
@@ -124,7 +130,6 @@ MODULE input_constants
                                                mol_dyn_run = 4, &
                                                geo_opt_run = 5, &
                                                mon_car_run = 6, &
-                                               electronic_spectra_run = 7, &
                                                debug_run = 8, &
                                                bsse_run = 9, &
                                                linear_response_run = 10, &
@@ -137,7 +142,8 @@ MODULE input_constants
                                                do_tamc = 17, &
                                                tree_mc_run = 18, &
                                                driver_run = 19, &
-                                               negf_run = 20
+                                               negf_run = 20, &
+                                               mimic_run = 21
 
    ! Run Types of Atom Code
    INTEGER, PARAMETER, PUBLIC               :: atom_no_run = 1, &
@@ -207,7 +213,8 @@ MODULE input_constants
                                                mopac_guess = 7, &
                                                sparse_guess = 8, &
                                                almo_scf_guess = 9, &
-                                               molecular_guess = 10
+                                               molecular_guess = 10, &
+                                               eht_guess = 11
 
    ! Projection formulas for the maximum overlap method
    INTEGER, PARAMETER, PUBLIC               :: momproj_norm = 0, &
@@ -245,7 +252,9 @@ MODULE input_constants
                                                wfi_use_prev_wf_method_nr = 6, &
                                                wfi_ps_method_nr = 7, &
                                                wfi_frozen_method_nr = 8, &
-                                               wfi_aspc_nr = 9
+                                               wfi_aspc_nr = 9, &
+                                               wfi_gext_proj_nr = 10, &
+                                               wfi_gext_proj_qtr_nr = 11
 
    INTEGER, PARAMETER, PUBLIC               :: do_method_undef = 0, &
                                                do_method_gapw = 1, &
@@ -304,7 +313,8 @@ MODULE input_constants
    ! pint propagator mode
    INTEGER, PARAMETER, PUBLIC               :: propagator_pimd = 1, &
                                                propagator_rpmd = 2, &
-                                               propagator_cmd = 3
+                                               propagator_cmd = 3, &
+                                               propagator_bcmd = 4
    ! pint propagator mode
    INTEGER, PARAMETER, PUBLIC               :: integrate_numeric = 1, &
                                                integrate_exact = 2
@@ -376,7 +386,8 @@ MODULE input_constants
                                                dump_xmol = 2, &
                                                dump_dcd = 3, &
                                                dump_pdb = 4, &
-                                               dump_dcd_aligned_cell = 5
+                                               dump_dcd_aligned_cell = 5, &
+                                               dump_extxyz = 6
 
    INTEGER, PARAMETER, PUBLIC               :: fmt_id_xyz = 1, &
                                                fmt_id_pdb = 2
@@ -414,6 +425,7 @@ MODULE input_constants
                                                do_region_massive = 2, &
                                                do_region_none = 3, &
                                                do_region_defined = 4, &
+                                               do_region_thermal = 5, &
                                                do_bondparm_covalent = 0, &
                                                do_bondparm_vdw = 1, &
                                                do_skip_11 = 0, &
@@ -455,7 +467,8 @@ MODULE input_constants
                                                do_loc_direct = 3, &
                                                do_loc_l1_norm_sd = 4, &
                                                do_loc_scdm = 5, &
-                                               do_loc_gapo = 6
+                                               do_loc_gapo = 6, &
+                                               do_loc_cs = 7
 
    INTEGER, PARAMETER, PUBLIC               :: do_loc_cpo_atomic = 0, &
                                                do_loc_cpo_restart = 1, &
@@ -509,7 +522,8 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: ot_mini_sd = 1, ot_mini_cg = 2, ot_mini_diis = 3, ot_mini_broyden = 4
    INTEGER, PARAMETER, PUBLIC               :: ot_algo_taylor_or_diag = 1, ot_algo_irac = 2
    INTEGER, PARAMETER, PUBLIC               :: ot_chol_irac = 1, ot_poly_irac = 2, ot_lwdn_irac = 3
-   INTEGER, PARAMETER, PUBLIC               :: ls_none = 1, ls_2pnt = 2, ls_3pnt = 3, ls_gold = 4, ls_fit = 5
+   INTEGER, PARAMETER, PUBLIC               :: ls_none = 1, ls_2pnt = 2, ls_3pnt = 3, ls_gold = 4, ls_fit = 5, &
+                                               ls_adapt = 6
    INTEGER, PARAMETER, PUBLIC               :: ot_precond_none = 0, &
                                                ot_precond_full_single = 1, &
                                                ot_precond_full_kinetic = 2, &
@@ -540,13 +554,19 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: none_ts_method_id = 0, &
                                                default_dimer_method_id = 1
 
+   INTEGER, PARAMETER, PUBLIC               :: dimer_init_random = 0, &
+                                               dimer_init_molden = 1
+
    INTEGER, PARAMETER, PUBLIC               :: do_first_rotation_step = 0, &
                                                do_second_rotation_step = 1, &
                                                do_third_rotation_step = 2
 
-   INTEGER, PARAMETER, PUBLIC               :: default_cell_geo_opt_id = 0, &
-                                               default_cell_md_id = 1, &
-                                               default_cell_direct_id = 2
+   ! See variable "iprint" in src/motion/cp_lbfgs.F for explanation
+   INTEGER, PARAMETER, PUBLIC               :: silent_lbfgs = 0, &
+                                               low_lbfgs = 1, &
+                                               medium_lbfgs = 99, &
+                                               high_lbfgs = 100, &
+                                               debug_lbfgs = 101
 
    INTEGER, PARAMETER, PUBLIC               :: xc_funct_no_shortcut = 0, &
                                                xc_funct_blyp = 1, &
@@ -581,6 +601,9 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: tddfpt_kernel_none = 2, &
                                                tddfpt_kernel_full = 1, &
                                                tddfpt_kernel_stda = 0
+   INTEGER, PARAMETER, PUBLIC               :: no_sf_tddfpt = 0, &
+                                               tddfpt_sf_col = 1, &
+                                               tddfpt_sf_noncol = 2
    INTEGER, PARAMETER, PUBLIC               :: oe_none = 0, &
                                                oe_lb = 1, &
                                                oe_gllb = 2, &
@@ -594,7 +617,8 @@ MODULE input_constants
                                                xc_vdw_fun_nonloc = 102
    INTEGER, PARAMETER, PUBLIC               :: vdw_pairpot_dftd2 = 1, &
                                                vdw_pairpot_dftd3 = 2, &
-                                               vdw_pairpot_dftd3bj = 3
+                                               vdw_pairpot_dftd3bj = 3, &
+                                               vdw_pairpot_dftd4 = 4
    INTEGER, PARAMETER, PUBLIC               :: vdw_nl_DRSLL = 1, &
                                                vdw_nl_LMKLL = 2, &
                                                vdw_nl_RVV10 = 3
@@ -621,6 +645,10 @@ MODULE input_constants
 
    INTEGER, PARAMETER, PUBLIC               :: xc_pot_none = 1000, &
                                                xc_pot_saop = 1001
+
+   INTEGER, PARAMETER, PUBLIC               :: xtb_vdw_type_none = 0, &
+                                               xtb_vdw_type_d3 = 1, &
+                                               xtb_vdw_type_d4 = 2
 
    ! Hirshfeld partitioning
    INTEGER, PARAMETER, PUBLIC               :: shape_function_gaussian = 1, &
@@ -693,7 +721,9 @@ MODULE input_constants
    ! Form of dipole operator for TDDFPT oscillator strength calculation
    INTEGER, PARAMETER, PUBLIC               :: tddfpt_dipole_berry = 1, &
                                                tddfpt_dipole_length = 2, &
-                                               tddfpt_dipole_velocity = 3
+                                               tddfpt_dipole_velocity = 3, &
+                                               tddfpt_dipole_velocity_old = 4, &
+                                               tddfpt_dipole_scf_moment = 5
 
    ! XC Kernel derivative methods for forces
    INTEGER, PARAMETER, PUBLIC               :: xc_kernel_method_best = 100, &
@@ -708,7 +738,9 @@ MODULE input_constants
 
    ! EIP models
    INTEGER, PARAMETER, PUBLIC               :: use_bazant_eip = 1, &
-                                               use_lenosky_eip = 2
+                                               use_lenosky_eip = 2, &
+                                               use_stillinger_weber_eip = 3, &
+                                               use_tersoff_eip = 4
 
    ! ddapc restraint forms
    INTEGER, PARAMETER, PUBLIC               :: do_ddapc_restraint = 773, &
@@ -890,7 +922,10 @@ MODULE input_constants
    ! Define identifier codes for smearing method
    INTEGER, PARAMETER, PUBLIC               :: smear_energy_window = 1, &
                                                smear_fermi_dirac = 2, &
-                                               smear_list = 3
+                                               smear_list = 3, &
+                                               smear_gaussian = 4, &
+                                               smear_mp = 5, &
+                                               smear_mv = 6
 
    ! Define identifier codes for mixing method
 
@@ -899,7 +934,7 @@ MODULE input_constants
                                                kerker_mix = 2, &
                                                pulay_mix = 3, &
                                                broy_mix = 4, &
-                                               broy_mix_new = 5, &
+                                               modified_broy_mix = 5, &
                                                multisec_mix = 6
 
    ! FFT library
@@ -918,7 +953,8 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: do_taylor = 1, &
                                                do_pade = 2, &
                                                do_arnoldi = 3, &
-                                               do_bch = 4
+                                               do_bch = 4, &
+                                               do_exact = 5
 
    INTEGER, PARAMETER, PUBLIC               :: do_etrs = 1, &
                                                do_cn = 2, &
@@ -933,9 +969,15 @@ MODULE input_constants
                                                ramp_env = 3, &
                                                custom_env = 4
 
-   ! type of reference for RTP%PRINT%PROJECTION_MO
-   INTEGER, PARAMETER, PUBLIC               :: proj_mo_ref_scf = 1, &
-                                               proj_mo_ref_xas_tdp = 2
+   INTEGER, PARAMETER, PUBLIC               :: rtp_localize_none = 0, &
+                                               rtp_localize_once = 1, &
+                                               rtp_localize_each = 2
+
+   INTEGER, PARAMETER, PUBLIC               :: rtp_method_tddft = 1, &
+                                               rtp_method_bse = 2
+
+   INTEGER, PARAMETER, PUBLIC               :: rtp_bse_ham_ks = 1, &
+                                               rtp_bse_ham_g0w0 = 2
 
    ! how to solve polarizable force fields
    INTEGER, PARAMETER, PUBLIC               :: do_fist_pol_none = 1, &
@@ -1053,6 +1095,10 @@ MODULE input_constants
                                                wfc_mm_style_gemm = 11, &
                                                wfc_mm_style_syrk = 12
 
+   ! RPA exchange corrections
+   INTEGER, PARAMETER, PUBLIC               :: rpa_exchange_none = 0, &
+                                               rpa_exchange_axk = 1, rpa_exchange_sosex = 2
+
    ! solvers of the z-vector equations
    INTEGER, PARAMETER, PUBLIC               :: z_solver_pople = 1, &
                                                z_solver_cg = 2, &
@@ -1080,7 +1126,13 @@ MODULE input_constants
                                                int_ldos_x = 19, &
                                                int_ldos_y = 20, &
                                                int_ldos_z = 21, &
-                                               int_ldos_none = 22
+                                               int_ldos_none = 22, &
+                                               small_cell_full_kp = 31, &
+                                               large_cell_Gamma = 32, &
+                                               G0W0 = 35, &
+                                               evGW0 = 36, &
+                                               evGW = 37, &
+                                               large_cell_Gamma_ri_rs = 38
 
    ! periodic RESP parameters
    INTEGER, PARAMETER, PUBLIC               :: do_resp_x_dir = 0, &
@@ -1109,14 +1161,10 @@ MODULE input_constants
                                                do_lri_opt_coeff = 1, &
                                                do_lri_opt_exps = 2
 
-   ! Active space model parameters
-   INTEGER, PARAMETER, PUBLIC               :: hf_model = 100, &
-                                               rsdft_model = 101, &
-                                               dmft_model = 102
-
    ! Active space external solvers
    INTEGER, PARAMETER, PUBLIC               :: no_solver = 200, &
-                                               qiskit_solver = 201
+                                               qiskit_solver = 201, &
+                                               fci_solver = 202
 
    ! callgraph parameters
    INTEGER, PARAMETER, PUBLIC               :: callgraph_none = 0, &
@@ -1134,9 +1182,15 @@ MODULE input_constants
 
    INTEGER, PARAMETER, PUBLIC               :: kg_cholesky = 3001
 
+   ! Harris method
+   INTEGER, PARAMETER, PUBLIC               :: hfun_harris = 1
+   INTEGER, PARAMETER, PUBLIC               :: hden_atomic = 10
+   INTEGER, PARAMETER, PUBLIC               :: horb_default = 100
+
    ! non-scf energy corrections
    INTEGER, PARAMETER, PUBLIC               :: ec_functional_harris = 2001, &
-                                               ec_functional_dc = 2002
+                                               ec_functional_dc = 2002, &
+                                               ec_functional_ext = 2003
 
    ! Energy correction solver
    INTEGER, PARAMETER, PUBLIC               :: ec_diagonalization = 1001, &
@@ -1220,7 +1274,13 @@ MODULE input_constants
                                                eri_operator_yukawa = 2, &
                                                eri_operator_erf = 3, &
                                                eri_operator_erfc = 4, &
-                                               eri_operator_gaussian = 5
+                                               eri_operator_gaussian = 5, &
+                                               eri_operator_trunc = 6, &
+                                               eri_operator_lr_trunc = 7
+
+   INTEGER, PARAMETER, PUBLIC               :: eri_poisson_analytic = 1, &
+                                               eri_poisson_periodic = 2, &
+                                               eri_poisson_mt = 3
 
    INTEGER, PARAMETER, PUBLIC               :: do_eri_gpw = 0, &
                                                do_eri_mme = 1, &
@@ -1273,5 +1333,98 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: wfn_mix_orig_occ = 1, &
                                                wfn_mix_orig_virtual = 2, &
                                                wfn_mix_orig_external = 3
+
+   ! DFT%PRINT%E_DENSITY_CUBE density type
+   INTEGER, PARAMETER, PUBLIC               :: e_dens_total_hard_approx = 1, &
+                                               e_dens_total_density = 2, &
+                                               e_dens_soft_density = 3
+   ! BSE spin configuration
+   INTEGER, PARAMETER, PUBLIC               :: bse_singlet = 0, &
+                                               bse_triplet = 1
+
+   ! BSE method of diagonalization (full diagonalization or iteratively)
+   INTEGER, PARAMETER, PUBLIC               :: bse_fulldiag = 0, &
+                                               bse_iterdiag = 1
+
+   ! BSE level of approximation to the ABBA matrix (i.e. with/without TDA)
+   INTEGER, PARAMETER, PUBLIC               :: bse_tda = 0, &
+                                               bse_abba = 1, &
+                                               bse_both = 2
+
+   ! BSE level of approximation to the screening
+   INTEGER, PARAMETER, PUBLIC               :: bse_screening_w0 = 0, &
+                                               bse_screening_tdhf = 1, &
+                                               bse_screening_rpa = 2, &
+                                               bse_screening_alpha = 3
+
+   ! BSE iterative abortion condition
+   INTEGER, PARAMETER, PUBLIC               :: bse_iter_en_cond = 0, &
+                                               bse_iter_res_cond = 1, &
+                                               bse_iter_both_cond = 2
+   ! SIGMA_functional parameters selection
+   INTEGER, PARAMETER, PUBLIC               :: sigma_none = 0, &
+                                               sigma_PBE_S2 = 1, &
+                                               sigma_PBE0_S1 = 2, &
+                                               sigma_PBE0_S2 = 3, &
+                                               sigma_PBE_S1 = 4
+   ! tblite method selection
+   INTEGER, PARAMETER, PUBLIC               :: gfn1xtb = 1, &
+                                               gfn2xtb = 2, &
+                                               ipea1xtb = 3, &
+                                               gfn_tblite = 4
+
+   ! tblite SCC mixer selection
+   INTEGER, PARAMETER, PUBLIC               :: tblite_scc_mixer_auto = 0, &
+                                               tblite_scc_mixer_tblite = 1, &
+                                               tblite_scc_mixer_cp2k = 2, &
+                                               tblite_scc_mixer_none = 3
+
+   ! tblite SCC mixer defaults matching the tblite library
+   INTEGER, PARAMETER, PUBLIC               :: tblite_mixer_iterations_default = 250, &
+                                               tblite_mixer_memory_inherit = 0
+   REAL(KIND=dp), PARAMETER, PUBLIC         :: tblite_mixer_damping_default = 0.4_dp, &
+                                               tblite_mixer_max_weight_default = 100000.0_dp, &
+                                               tblite_mixer_min_weight_default = 1.0_dp, &
+                                               tblite_mixer_omega0_default = 0.01_dp, &
+                                               tblite_mixer_weight_factor_default = 0.01_dp
+
+   ! tblite reference CLI initial guess selection
+   INTEGER, PARAMETER, PUBLIC               :: tblite_guess_sad = 0, &
+                                               tblite_guess_eeq = 1, &
+                                               tblite_guess_ceh = 2
+
+   ! tblite native electronic solver selection
+   INTEGER, PARAMETER, PUBLIC               :: tblite_solver_gvd = 0, &
+                                               tblite_solver_gvr = 1
+
+   ! tblite reference CLI implicit solvation selection
+   INTEGER, PARAMETER, PUBLIC               :: tblite_cli_solvation_none = 0, &
+                                               tblite_cli_solvation_alpb = 1, &
+                                               tblite_cli_solvation_gbsa = 2, &
+                                               tblite_cli_solvation_gbe = 3, &
+                                               tblite_cli_solvation_gb = 4, &
+                                               tblite_cli_solvation_cpcm = 5
+
+   INTEGER, PARAMETER, PUBLIC               :: tblite_cli_born_kernel_auto = 0, &
+                                               tblite_cli_born_kernel_p16 = 1, &
+                                               tblite_cli_born_kernel_still = 2
+
+   INTEGER, PARAMETER, PUBLIC               :: tblite_cli_solution_state_gsolv = 0, &
+                                               tblite_cli_solution_state_bar1mol = 1, &
+                                               tblite_cli_solution_state_reference = 2
+
+   ! SMEAGOL interface
+   INTEGER, PARAMETER, PUBLIC               :: smeagol_bulklead_leftright = 1, &
+                                               smeagol_bulklead_left = 2, &
+                                               smeagol_bulklead_right = 3
+
+   INTEGER, PARAMETER, PUBLIC               :: smeagol_gridmethod_traditional = 0, &
+                                               smeagol_gridmethod_adaptive = 1
+
+   INTEGER, PARAMETER, PUBLIC               :: smeagol_integraltype_gauss_legendre = 1, &
+                                               smeagol_integraltype_gauss_chebyshev = 2
+
+   INTEGER, PARAMETER, PUBLIC               :: smeagol_runtype_bulktransport = 0, &
+                                               smeagol_runtype_emtransport = 1
 
 END MODULE input_constants

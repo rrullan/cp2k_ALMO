@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,6 +16,10 @@ MODULE qmmm_se_energy
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_get_block_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set
    USE cp_dbcsr_output,                 ONLY: cp_dbcsr_write_sparse_matrix
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -24,10 +28,6 @@ MODULE qmmm_se_energy
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_get_block_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set
    USE input_constants,                 ONLY: &
         do_method_am1, do_method_mndo, do_method_mndod, do_method_pchg, do_method_pdg, &
         do_method_pm3, do_method_pm6, do_method_pm6fm, do_method_pnnl, do_method_rm1, &
@@ -180,7 +180,7 @@ CONTAINS
             CALL get_se_param(se_kind_a, &
                               defined=defined, &
                               natorb=natorb_a)
-            IF (.NOT. defined .OR. natorb_a < 1) CYCLE
+            IF (.NOT. defined .OR. natorb_a < 1) CYCLE Kinds
             Atoms: DO i = 1, SIZE(list)
                iatom = list(i)
                ! Give back block
@@ -313,14 +313,14 @@ CONTAINS
             rt1 = r_pbc(1)
             rt2 = r_pbc(2)
             rt3 = r_pbc(3)
-            rij = (/rt1, rt2, rt3/)
+            rij = [rt1, rt2, rt3]
             se_kind_mm%zeff = mm_charges(Imm)
             ! Computes the screening factor for the spherical cutoff (if defined)
             IF (qmmm_spherical_cutoff(1) > 0.0_dp) THEN
                CALL spherical_cutoff_factor(qmmm_spherical_cutoff, rij, sph_chrg_factor)
                se_kind_mm%zeff = se_kind_mm%zeff*sph_chrg_factor
             END IF
-            IF (ABS(se_kind_mm%zeff) <= EPSILON(0.0_dp)) CYCLE
+            IF (ABS(se_kind_mm%zeff) <= EPSILON(0.0_dp)) CYCLE LoopMM
             CALL rotnuc(se_kind_a, se_kind_mm, rij, itype=itype, e1b=e1b, anag=anag, &
                         se_int_control=se_int_control, se_taper=se_taper)
             CALL corecore(se_kind_a, se_kind_mm, rij, itype=itype, enuc=enuc, anag=anag, &

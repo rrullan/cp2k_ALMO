@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,8 +22,8 @@ MODULE md_vel_utils
    USE bibliography,                    ONLY: West2006,&
                                               cite_reference
    USE cell_types,                      ONLY: &
-        cell_type, use_perd_none, use_perd_x, use_perd_xy, use_perd_xyz, use_perd_xz, use_perd_y, &
-        use_perd_yz, use_perd_z
+        cell_transform_input_cartesian, cell_type, use_perd_none, use_perd_x, use_perd_xy, &
+        use_perd_xyz, use_perd_xz, use_perd_y, use_perd_yz, use_perd_z
    USE cp_linked_list_input,            ONLY: cp_sll_val_next,&
                                               cp_sll_val_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -153,7 +153,7 @@ CONTAINS
       DO i = 1, SIZE(part)
          atomic_kind => part(i)%atomic_kind
          CALL get_atomic_kind(atomic_kind=atomic_kind, mass=mass)
-         IF (mass .NE. 0.0) THEN
+         IF (mass /= 0.0) THEN
             SELECT CASE (is_fixed(i))
             CASE (use_perd_x, use_perd_y, use_perd_z, use_perd_xy, use_perd_xz, use_perd_yz, use_perd_none)
                vcom(1) = vcom(1) + part(i)%v(1)*mass
@@ -708,6 +708,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(3)                        :: vc, vcom, vs
       REAL(KIND=dp), DIMENSION(:), POINTER               :: vel
       TYPE(atomic_kind_type), POINTER                    :: atomic_kind
+      TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_sll_val_type), POINTER                     :: atom_list, core_list, shell_list
       TYPE(section_vals_type), POINTER                   :: atomvel_section, corevel_section, &
                                                             shellvel_section
@@ -724,7 +725,8 @@ CONTAINS
       shellvel_read = .FALSE.
       NULLIFY (vel, atomic_kind, atom_list, core_list, shell_list)
       NULLIFY (atomvel_section, shellvel_section, corevel_section)
-      NULLIFY (shell, thermal_regions, val)
+      NULLIFY (cell, shell, thermal_regions, val)
+      CALL force_env_get(force_env, cell=cell)
 
       ! Core-Shell Model
       nshell = 0
@@ -745,11 +747,11 @@ CONTAINS
       CPASSERT(shellvel_explicit .EQV. corevel_explicit)
 
       CALL read_binary_velocities("", part, force_env%root_section, para_env, &
-                                  subsys_section, atomvel_read)
+                                  subsys_section, atomvel_read, cell)
       CALL read_binary_velocities("SHELL", shell_part, force_env%root_section, para_env, &
-                                  subsys_section, shellvel_read)
+                                  subsys_section, shellvel_read, cell)
       CALL read_binary_velocities("CORE", core_part, force_env%root_section, para_env, &
-                                  subsys_section, corevel_read)
+                                  subsys_section, corevel_read, cell)
 
       IF (.NOT. (atomvel_explicit .OR. atomvel_read)) RETURN
       success = .TRUE.
@@ -761,6 +763,7 @@ CONTAINS
             is_ok = cp_sll_val_next(atom_list, val)
             CALL val_get(val, r_vals=vel)
             part(i)%v = vel
+            CALL cell_transform_input_cartesian(cell, part(i)%v)
          END DO
       END IF
       DO i = 1, natoms
@@ -794,9 +797,11 @@ CONTAINS
                is_ok = cp_sll_val_next(shell_list, val)
                CALL val_get(val, r_vals=vel)
                shell_part(i)%v = vel
+               CALL cell_transform_input_cartesian(cell, shell_part(i)%v)
                is_ok = cp_sll_val_next(core_list, val)
                CALL val_get(val, r_vals=vel)
                core_part(i)%v = vel
+               CALL cell_transform_input_cartesian(cell, core_part(i)%v)
             END DO
          ELSE
             IF (.NOT. (shellvel_read .AND. corevel_read)) THEN
@@ -909,7 +914,7 @@ CONTAINS
                                      dof, &
                                      eigenvalues, &
                                      eigenvectors)
-      IF (my_dof .NE. dof) THEN
+      IF (my_dof /= dof) THEN
          CALL cp_abort(__LOCATION__, &
                        "number of degrees of freedom in vibrational analysis data "// &
                        "do not match total number of cartesian degrees of freedom")
@@ -920,7 +925,7 @@ CONTAINS
       ! generate random numbers
       random_stream = rng_stream_type(name="MD_INIT_VIB", distribution_type=UNIFORM)
       CALL random_stream%fill(random)
-      IF (my_phase .LT. 0.0_dp) THEN
+      IF (my_phase < 0.0_dp) THEN
          CALL random_stream%fill(phase)
       ELSE
          phase = my_phase
@@ -1023,7 +1028,7 @@ CONTAINS
          ! the cores and shells must also move by the same amount. The
          ! shell positions will then be optimised if needed
          shell_index = particles(iatom)%shell_index
-         IF (shell_index .NE. 0) THEN
+         IF (shell_index /= 0) THEN
             core_particles(shell_index)%r(:) = core_particles(shell_index)%r(:) + &
                                                dr(:, iatom)
             shell_particles(shell_index)%r(:) = shell_particles(shell_index)%r(:) + &
@@ -1085,7 +1090,7 @@ CONTAINS
       ! first three modes are acoustic with zero frequencies. These are
       ! excluded from considerations, and should have been reflected in
       ! the calculation of scale outside this function
-      IF (mass .GT. 0.0_dp) THEN
+      IF (mass > 0.0_dp) THEN
          ! eigenvector rows assumed to be grouped in atomic blocks
          ind = (iatom - 1)*3 + icart
          DO imode = 4, dof
@@ -1141,7 +1146,7 @@ CONTAINS
       ! first three modes are acoustic with zero frequencies. These are
       ! excluded from considerations, and should have been reflected in
       ! the calculation of scale outside this function
-      IF (mass .GT. 0.0_dp) THEN
+      IF (mass > 0.0_dp) THEN
          ! eigenvector rows assumed to be grouped in atomic blocks
          ind = (iatom - 1)*3 + icart
          DO imode = 4, dof
@@ -1192,7 +1197,7 @@ CONTAINS
          part(i)%v(1) = 0.0_dp
          part(i)%v(2) = 0.0_dp
          part(i)%v(3) = 0.0_dp
-         IF (mass .NE. 0.0) THEN
+         IF (mass /= 0.0) THEN
             SELECT CASE (is_fixed(i))
             CASE (use_perd_x)
                part(i)%v(2) = globenv%gaussian_rng_stream%next()/SQRT(mass)
@@ -2297,8 +2302,9 @@ CONTAINS
          norm = 0.0_dp
          DO iatom = 1, natom
             iparticle = atom_index(iatom)
-            IF (particle_set(iparticle)%shell_index /= 0) &
+            IF (particle_set(iparticle)%shell_index /= 0) THEN
                CPWARN("Warning: The primary knock-on atom is a core-shell atom")
+            END IF
             atomic_kind => particle_set(iparticle)%atomic_kind
             CALL get_atomic_kind(atomic_kind=atomic_kind, mass=matom(iatom))
             norm = norm + matom(iatom)*weight(iatom)

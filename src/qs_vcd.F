@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -9,6 +9,10 @@ MODULE qs_vcd
    USE cell_types,                      ONLY: cell_type
    USE commutator_rpnl,                 ONLY: build_com_mom_nl
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
+                                              dbcsr_copy,&
+                                              dbcsr_desymmetrize,&
+                                              dbcsr_set
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale,&
                                               cp_fm_scale_and_add,&
@@ -22,10 +26,6 @@ MODULE qs_vcd
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
-                                              dbcsr_copy,&
-                                              dbcsr_desymmetrize,&
-                                              dbcsr_set
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type
    USE kinds,                           ONLY: dp
@@ -63,11 +63,11 @@ MODULE qs_vcd
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_vcd'
 
-   REAL(dp), DIMENSION(3, 3, 3), PARAMETER  :: Levi_Civita = RESHAPE((/ &
+   REAL(dp), DIMENSION(3, 3, 3), PARAMETER  :: Levi_Civita = RESHAPE([ &
                                                           0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, &
                                                           0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, -1.0_dp, 0.0_dp, 0.0_dp, &
-                                                        0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp/), &
-                                                                     (/3, 3, 3/))
+                                                         0.0_dp, -1.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp], &
+                                                                     [3, 3, 3])
    INTEGER, DIMENSION(3, 3), PARAMETER :: multipole_2d_to_1d = RESHAPE([4, 5, 6, 5, 7, 8, 6, 8, 9], [3, 3])
 CONTAINS
 
@@ -117,7 +117,7 @@ CONTAINS
 
          ! I_{alpha beta}^lambda = 1/2c \sum_j^occ ...
          aat_prefactor = 1.0_dp!/(c_light_au * 2._dp)
-         IF (nspins .EQ. 1) aat_prefactor = aat_prefactor*2.0_dp
+         IF (nspins == 1) aat_prefactor = aat_prefactor*2.0_dp
 
          ! The non-PP part of the AAT consists of four contributions:
          !  (A1):  + P^0 * ε_{alpha gamma delta} * < mu | r_beta r_gamma ∂_delta | nu > * (mu == lambda)
@@ -625,7 +625,7 @@ CONTAINS
                  deltaR => vcd_env%dcdr_env%deltaR)
 
          ! build the full matrices
-         CALL cp_fm_create(buf, vcd_env%dcdr_env%likemos_fm_struct(ispin)%struct)
+         CALL cp_fm_create(buf, vcd_env%dcdr_env%likemos_fm_struct(ispin)%struct, set_zero=.TRUE.)
          CALL cp_fm_create(matrix_dSdV_mo, vcd_env%dcdr_env%momo_fm_struct(ispin)%struct)
 
          ! STEP 1: dCV contribution (dipvel + commutator)
@@ -1073,7 +1073,7 @@ CONTAINS
       END IF
 
       ASSOCIATE (psi0_order => vcd_env%dcdr_env%mo_coeff)
-         CALL cp_fm_create(psi1(ispin), vcd_env%dcdr_env%likemos_fm_struct(ispin)%struct)
+         CALL cp_fm_create(psi1(ispin), vcd_env%dcdr_env%likemos_fm_struct(ispin)%struct, set_zero=.TRUE.)
          CALL cp_fm_create(h1_psi0(ispin), vcd_env%dcdr_env%likemos_fm_struct(ispin)%struct)
 
          ! Restart

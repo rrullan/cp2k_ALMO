@@ -26,13 +26,17 @@ apt-get install -qq --no-install-recommends \
   libtool \
   libtool-bin \
   make \
+  ninja-build \
   nano \
   patch \
   pkg-config \
   python3 \
+  python3-dev \
+  python3-pip \
   unzip \
   wget \
   xxd \
+  xz-utils \
   zlib1g-dev
 
 rm -rf /var/lib/apt/lists/*

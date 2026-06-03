@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,6 +14,11 @@
 ! **************************************************************************************************
 MODULE stm_images
    USE cp_array_utils,                  ONLY: cp_1d_r_p_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_deallocate_matrix,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_plus_fm_fm_t
    USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -29,11 +34,6 @@ MODULE stm_images
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_deallocate_matrix,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type
    USE input_section_types,             ONLY: section_get_ivals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -266,7 +266,7 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: append_cube
 
       CHARACTER(LEN=*), DIMENSION(0:9), PARAMETER :: &
-         torb_string = (/"  s", " px", " py", " pz", "dxy", "dyz", "dzx", "dx2", "dy2", "dz2"/)
+         torb_string = ["  s", " px", " py", " pz", "dxy", "dyz", "dzx", "dx2", "dy2", "dz2"]
       CHARACTER(len=*), PARAMETER                        :: routineN = 'stm_cubes'
 
       CHARACTER(LEN=default_path_length)                 :: filename

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -207,8 +207,7 @@ CONTAINS
       END IF
 
       IF (my_end) THEN
-         IF (j /= natom) &
-            CPWARN("No VELOCITY or BOX information found in CRD file. ")
+         CPWARN_IF(j /= natom, "No VELOCITY or BOX information found in CRD file.")
       ELSE
          ! Velocities
          CALL reallocate(velocity, 1, 3, 1, natom)
@@ -256,8 +255,7 @@ CONTAINS
          DEALLOCATE (velocity)
       END IF
       IF (my_end) THEN
-         IF (j /= natom) &
-            CPWARN("BOX information missing in CRD file. ")
+         CPWARN_IF(j /= natom, "BOX information missing in CRD file.")
       ELSE
          IF (j /= natom) &
             CALL cp_warn(__LOCATION__, &
@@ -1625,7 +1623,7 @@ CONTAINS
          label_d(iphi) = work_label(4, 1)
          k(iphi) = pk(icp(iwork(1)))
          m(iphi) = NINT(pn(icp(iwork(1))))
-         IF (m(iphi) - pn(icp(iwork(1))) .GT. EPSILON(1.0_dp)) THEN
+         IF (m(iphi) - pn(icp(iwork(1))) > EPSILON(1.0_dp)) THEN
             ! non integer torsions not supported
             CPABORT("")
          END IF
@@ -1659,7 +1657,7 @@ CONTAINS
                label_d(iphi) = work_label(4, i)
                k(iphi) = pk(icp(iwork(i)))
                m(iphi) = NINT(pn(icp(iwork(i))))
-               IF (m(iphi) - pn(icp(iwork(i))) .GT. EPSILON(1.0_dp)) THEN
+               IF (m(iphi) - pn(icp(iwork(i))) > EPSILON(1.0_dp)) THEN
                   ! non integer torsions not supported
                   CPABORT("")
                END IF

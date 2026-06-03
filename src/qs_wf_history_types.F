@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,12 +14,14 @@
 !> \author fawzi
 ! **************************************************************************************************
 MODULE qs_wf_history_types
+   USE cp_cfm_types,                    ONLY: cp_cfm_release,&
+                                              cp_cfm_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_deallocate_matrix,&
+                                              dbcsr_p_type,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_deallocate_matrix,&
-                                              dbcsr_p_type,&
-                                              dbcsr_type
    USE kinds,                           ONLY: dp
    USE pw_types,                        ONLY: pw_c1d_gs_type,&
                                               pw_r3d_rs_type
@@ -35,7 +37,7 @@ MODULE qs_wf_history_types
 
    PUBLIC :: qs_wf_snapshot_type, &
              qs_wf_history_type, qs_wf_history_p_type
-   PUBLIC :: wfi_retain, wfi_release, wfi_get_snapshot
+   PUBLIC :: wfi_retain, wfi_release, wfi_clear, wfi_get_snapshot
 
 ! **************************************************************************************************
 !> \brief represent a past snapshot of the wavefunction.
@@ -56,14 +58,17 @@ MODULE qs_wf_history_types
 !> \author fawzi
 ! **************************************************************************************************
    TYPE qs_wf_snapshot_type
-      TYPE(cp_fm_type), DIMENSION(:), POINTER :: wf
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: rho_r
-      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER :: rho_g
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER :: rho_ao
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER :: rho_ao_kp
-      TYPE(dbcsr_type), POINTER :: overlap
-      TYPE(qs_rho_type), POINTER :: rho_frozen
-      REAL(KIND=dp) :: dt
+      TYPE(cp_fm_type), DIMENSION(:), POINTER :: wf => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: rho_r => NULL()
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER :: rho_g => NULL()
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER :: rho_ao => NULL()
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER :: rho_ao_kp => NULL()
+      TYPE(dbcsr_type), POINTER :: overlap => NULL()
+      TYPE(cp_fm_type), DIMENSION(:, :, :), POINTER :: wf_kp => NULL()
+      TYPE(cp_cfm_type), DIMENSION(:), POINTER :: overlap_cfm_kp => NULL()
+      INTEGER, DIMENSION(:, :), POINTER :: kp_pbc_shift => NULL()
+      TYPE(qs_rho_type), POINTER :: rho_frozen => NULL()
+      REAL(KIND=dp) :: dt = 0.0_dp
    END TYPE qs_wf_snapshot_type
 
 ! **************************************************************************************************
@@ -74,7 +79,7 @@ MODULE qs_wf_history_types
 !> \author fawzi
 ! **************************************************************************************************
    TYPE qs_wf_snapshot_p_type
-      TYPE(qs_wf_snapshot_type), POINTER :: snapshot
+      TYPE(qs_wf_snapshot_type), POINTER :: snapshot => NULL()
    END TYPE qs_wf_snapshot_p_type
 
 ! **************************************************************************************************
@@ -96,11 +101,13 @@ MODULE qs_wf_history_types
 !> \author fawzi
 ! **************************************************************************************************
    TYPE qs_wf_history_type
-      INTEGER :: ref_count, memory_depth, last_state_index, &
-                 interpolation_method_nr, snapshot_count
-      LOGICAL :: store_wf, store_rho_r, store_rho_g, store_rho_ao, store_rho_ao_kp, &
-                 store_overlap, store_frozen_density
-      TYPE(qs_wf_snapshot_p_type), DIMENSION(:), POINTER :: past_states
+      INTEGER :: ref_count = -1, memory_depth = -1, last_state_index = -1, &
+                 interpolation_method_nr = -1, snapshot_count = -1
+      LOGICAL :: store_wf = .FALSE., store_rho_r = .FALSE., store_rho_g = .FALSE., &
+                 store_rho_ao = .FALSE., store_rho_ao_kp = .FALSE., &
+                 store_overlap = .FALSE., store_wf_kp = .FALSE., store_overlap_kp = .FALSE., &
+                 store_frozen_density = .FALSE.
+      TYPE(qs_wf_snapshot_p_type), DIMENSION(:), POINTER :: past_states => NULL()
    END TYPE qs_wf_history_type
 
 ! **************************************************************************************************
@@ -109,7 +116,7 @@ MODULE qs_wf_history_types
 !> \author fawzi
 ! **************************************************************************************************
    TYPE qs_wf_history_p_type
-      TYPE(qs_wf_history_type), POINTER :: wf_history
+      TYPE(qs_wf_history_type), POINTER :: wf_history => NULL()
    END TYPE qs_wf_history_p_type
 
 CONTAINS
@@ -125,6 +132,8 @@ CONTAINS
    SUBROUTINE wfs_release(snapshot)
       TYPE(qs_wf_snapshot_type), INTENT(INOUT)           :: snapshot
 
+      INTEGER                                            :: i, ic, ikp, ispin
+
       CALL cp_fm_release(snapshot%wf)
       ! snapshot%rho_r & snapshot%rho_g is deallocated in wfs_update
       ! of qs_wf_history_methods, in case you wonder about it.
@@ -136,6 +145,25 @@ CONTAINS
       END IF
       IF (ASSOCIATED(snapshot%overlap)) THEN
          CALL dbcsr_deallocate_matrix(snapshot%overlap)
+      END IF
+      IF (ASSOCIATED(snapshot%wf_kp)) THEN
+         DO ikp = 1, SIZE(snapshot%wf_kp, 1)
+            DO ic = 1, SIZE(snapshot%wf_kp, 2)
+               DO ispin = 1, SIZE(snapshot%wf_kp, 3)
+                  CALL cp_fm_release(snapshot%wf_kp(ikp, ic, ispin))
+               END DO
+            END DO
+         END DO
+         DEALLOCATE (snapshot%wf_kp)
+      END IF
+      IF (ASSOCIATED(snapshot%overlap_cfm_kp)) THEN
+         DO i = 1, SIZE(snapshot%overlap_cfm_kp)
+            CALL cp_cfm_release(snapshot%overlap_cfm_kp(i))
+         END DO
+         DEALLOCATE (snapshot%overlap_cfm_kp)
+      END IF
+      IF (ASSOCIATED(snapshot%kp_pbc_shift)) THEN
+         DEALLOCATE (snapshot%kp_pbc_shift)
       END IF
       IF (ASSOCIATED(snapshot%rho_frozen)) THEN
          CALL qs_rho_release(snapshot%rho_frozen)
@@ -190,6 +218,32 @@ CONTAINS
       END IF
       NULLIFY (wf_history)
    END SUBROUTINE wfi_release
+
+! **************************************************************************************************
+!> \brief Clear stored wavefunction snapshots while preserving history settings.
+!> \param wf_history the wf_history to clear
+! **************************************************************************************************
+   SUBROUTINE wfi_clear(wf_history)
+      TYPE(qs_wf_history_type), POINTER                  :: wf_history
+
+      INTEGER                                            :: i
+
+      IF (ASSOCIATED(wf_history)) THEN
+         CPASSERT(wf_history%ref_count > 0)
+         IF (ASSOCIATED(wf_history%past_states)) THEN
+            DO i = 1, SIZE(wf_history%past_states)
+               IF (ASSOCIATED(wf_history%past_states(i)%snapshot)) THEN
+                  CALL wfs_release(wf_history%past_states(i)%snapshot)
+                  DEALLOCATE (wf_history%past_states(i)%snapshot)
+                  NULLIFY (wf_history%past_states(i)%snapshot)
+               END IF
+            END DO
+         END IF
+         wf_history%snapshot_count = 0
+         wf_history%last_state_index = 1
+      END IF
+
+   END SUBROUTINE wfi_clear
 
 ! **************************************************************************************************
 !> \brief returns a snapshot, the first being the latest snapshot

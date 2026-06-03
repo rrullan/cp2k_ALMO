@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,17 +16,17 @@ MODULE qs_2nd_kernel_ao
    USE admm_types,                      ONLY: admm_type,&
                                               get_admm_env
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_operations,             ONLY: cp_dbcsr_plus_fm_fm_t,&
-                                              dbcsr_allocate_matrix_set,&
-                                              dbcsr_deallocate_matrix_set
-   USE cp_fm_types,                     ONLY: cp_fm_get_info,&
-                                              cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
                                               dbcsr_copy,&
                                               dbcsr_create,&
                                               dbcsr_p_type,&
                                               dbcsr_release,&
                                               dbcsr_set
+   USE cp_dbcsr_operations,             ONLY: cp_dbcsr_plus_fm_fm_t,&
+                                              dbcsr_allocate_matrix_set,&
+                                              dbcsr_deallocate_matrix_set
+   USE cp_fm_types,                     ONLY: cp_fm_get_info,&
+                                              cp_fm_type
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
    USE input_constants,                 ONLY: do_admm_aux_exch_func_none,&
                                               do_admm_basis_projection,&
@@ -156,8 +156,8 @@ CONTAINS
          xc_section => section_vals_get_subs_vals(input, "DFT%XC")
       END IF
 
-      CALL calc_kpp1(p_env%rho1_xc, p_env%rho1, xc_section, .FALSE., &
-                     .FALSE., dft_control%qs_control%lrigpw, .TRUE., linres_control%lr_triplet, &
+      CALL calc_kpp1(p_env%rho1_xc, p_env%rho1, xc_section, &
+                     dft_control%qs_control%lrigpw, linres_control%lr_triplet, &
                      qs_env, p_env, calc_forces=my_calc_forces, calc_virial=my_calc_virial, virial=virial)
 
       ! hfx section
@@ -285,6 +285,7 @@ CONTAINS
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_aux_r, tau1_aux_r, v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), POINTER                      :: weights
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho_aux
       TYPE(section_vals_type), POINTER                   :: xc_section
@@ -315,7 +316,7 @@ CONTAINS
          NULLIFY (v_xc)
          ! calculate the xc potential
          lsd = (nspins == 2)
-         CALL get_qs_env(qs_env=qs_env, ks_env=ks_env, admm_env=admm_env)
+         CALL get_qs_env(qs_env=qs_env, ks_env=ks_env, admm_env=admm_env, xcint_weights=weights)
          CALL get_admm_env(admm_env, task_list_aux_fit=task_list_aux_fit)
 
          CALL qs_rho_get(p_env%rho1_admm, rho_r=rho1_aux_r, rho_g=rho1_aux_g, tau_r=tau1_aux_r)
@@ -323,7 +324,9 @@ CONTAINS
 
          CALL xc_calc_2nd_deriv(v_xc, v_xc_tau, p_env%kpp1_env%deriv_set_admm, &
                                 p_env%kpp1_env%rho_set_admm, &
-                                rho1_aux_r, rho1_aux_g, tau1_aux_r, auxbas_pw_pool, xc_section=xc_section, gapw=.FALSE., &
+                                rho1_aux_r, rho1_aux_g, tau1_aux_r, auxbas_pw_pool, &
+                                weights=weights, &
+                                xc_section=xc_section, gapw=.FALSE., &
                                 compute_virial=calc_virial, virial_xc=virial)
 
          NULLIFY (work_hmat%matrix)

@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -17,6 +17,7 @@
 #include "grid_ref_collocate.h"
 #include "grid_ref_integrate.h"
 #include "grid_ref_task_list.h"
+#include "grid_ref_task_list_internal.h"
 
 /*******************************************************************************
  * \brief Comperator passed to qsort to compare two tasks.
@@ -59,7 +60,9 @@ void grid_ref_create_task_list(
     grid_ref_free_task_list(*task_list_out);
   }
 
-  grid_ref_task_list *task_list = malloc(sizeof(grid_ref_task_list));
+  grid_ref_task_list_internal *task_list =
+      malloc(sizeof(grid_ref_task_list_internal));
+  assert(task_list != NULL);
 
   task_list->orthorhombic = orthorhombic;
   task_list->ntasks = ntasks;
@@ -70,22 +73,36 @@ void grid_ref_create_task_list(
 
   size_t size = nblocks * sizeof(int);
   task_list->block_offsets = malloc(size);
-  memcpy(task_list->block_offsets, block_offsets, size);
+  assert(task_list->block_offsets != NULL || size == 0);
+  if (size != 0) {
+    memcpy(task_list->block_offsets, block_offsets, size);
+  }
 
   size = 3 * natoms * sizeof(double);
   task_list->atom_positions = malloc(size);
-  memcpy(task_list->atom_positions, atom_positions, size);
+  assert(task_list->atom_positions != NULL || size == 0);
+  if (size != 0) {
+    memcpy(task_list->atom_positions, atom_positions, size);
+  }
 
   size = natoms * sizeof(int);
   task_list->atom_kinds = malloc(size);
-  memcpy(task_list->atom_kinds, atom_kinds, size);
+  assert(task_list->atom_kinds != NULL || size == 0);
+  if (size != 0) {
+    memcpy(task_list->atom_kinds, atom_kinds, size);
+  }
 
   size = nkinds * sizeof(grid_basis_set *);
   task_list->basis_sets = malloc(size);
-  memcpy(task_list->basis_sets, basis_sets, size);
+  assert(task_list->basis_sets != NULL || size == 0);
+  if (size != 0) {
+    memcpy(task_list->basis_sets, basis_sets, size);
+  }
 
   size = ntasks * sizeof(grid_ref_task);
   task_list->tasks = malloc(size);
+  assert(task_list->tasks != NULL || size == 0);
+#pragma omp parallel for schedule(static) if (ntasks > GRID_OMP_MIN_ITERATIONS)
   for (int i = 0; i < ntasks; i++) {
     task_list->tasks[i].level = level_list[i];
     task_list->tasks[i].iatom = iatom_list[i];
@@ -105,6 +122,7 @@ void grid_ref_create_task_list(
   // Store grid layouts.
   size = nlevels * sizeof(grid_ref_layout);
   task_list->layouts = malloc(size);
+  assert(task_list->layouts != NULL || size == 0);
   for (int level = 0; level < nlevels; level++) {
     for (int i = 0; i < 3; i++) {
       task_list->layouts[level].npts_global[i] = npts_global[level][i];
@@ -124,8 +142,13 @@ void grid_ref_create_task_list(
   // Find first and last task for each level and block.
   size = nlevels * nblocks * sizeof(int);
   task_list->first_level_block_task = malloc(size);
+  assert(task_list->first_level_block_task != NULL || size == 0);
   task_list->last_level_block_task = malloc(size);
-  for (int i = 0; i < nlevels * nblocks; i++) {
+  assert(task_list->last_level_block_task != NULL || size == 0);
+  const int nlevel_blocks = nlevels * nblocks;
+#pragma omp parallel for schedule(static) if (nlevel_blocks >                  \
+                                                  GRID_OMP_MIN_ITERATIONS)
+  for (int i = 0; i < nlevel_blocks; i++) {
     task_list->first_level_block_task[i] = 0;
     task_list->last_level_block_task[i] = -1; // last < first means no tasks
   }
@@ -148,9 +171,11 @@ void grid_ref_create_task_list(
   // Initialize thread-local storage.
   size = omp_get_max_threads() * sizeof(double *);
   task_list->threadlocals = malloc(size);
+  assert(task_list->threadlocals != NULL);
   memset(task_list->threadlocals, 0, size);
   size = omp_get_max_threads() * sizeof(size_t);
   task_list->threadlocal_sizes = malloc(size);
+  assert(task_list->threadlocal_sizes != NULL);
   memset(task_list->threadlocal_sizes, 0, size);
 
   *task_list_out = task_list;
@@ -160,7 +185,12 @@ void grid_ref_create_task_list(
  * \brief Deallocates given task list, basis_sets have to be freed separately.
  * \author Ole Schuett
  ******************************************************************************/
-void grid_ref_free_task_list(grid_ref_task_list *task_list) {
+void grid_ref_free_task_list(grid_ref_task_list *ptr) {
+  if (ptr == NULL)
+    return;
+
+  grid_ref_task_list_internal *task_list = (grid_ref_task_list_internal *)ptr;
+
   free(task_list->block_offsets);
   free(task_list->atom_positions);
   free(task_list->atom_kinds);
@@ -245,11 +275,16 @@ static void load_pab(const grid_basis_set *ibasis, const grid_basis_set *jbasis,
  * \author Ole Schuett
  ******************************************************************************/
 static void collocate_one_grid_level(
-    const grid_ref_task_list *task_list, const int *first_block_task,
+    const grid_ref_task_list *ptr, const int *first_block_task,
     const int *last_block_task, const enum grid_func func,
     const int npts_global[3], const int npts_local[3], const int shift_local[3],
     const int border_width[3], const double dh[3][3], const double dh_inv[3][3],
     const double *pab_blocks, offload_buffer *grid) {
+
+  if (ptr == NULL)
+    return;
+
+  grid_ref_task_list_internal *task_list = (grid_ref_task_list_internal *)ptr;
 
 // Using default(shared) because with GCC 9 the behavior around const changed:
 // https://www.gnu.org/software/gcc/gcc-9/porting_to.html
@@ -262,7 +297,7 @@ static void collocate_one_grid_level(
     int old_offset = -1, old_iset = -1, old_jset = -1;
 
     // Matrix pab is re-used across tasks.
-    double pab[task_list->maxco * task_list->maxco];
+    double pab[imax(task_list->maxco * task_list->maxco, 1)];
 
     // Ensure that grid can fit into thread-local storage, reallocate if needed.
     const int npts_local_total = npts_local[0] * npts_local[1] * npts_local[2];
@@ -272,6 +307,7 @@ static void collocate_one_grid_level(
         free(task_list->threadlocals[ithread]);
       }
       task_list->threadlocals[ithread] = malloc(grid_size);
+      assert(task_list->threadlocals[ithread] != NULL);
       task_list->threadlocal_sizes[ithread] = grid_size;
     }
 
@@ -348,7 +384,7 @@ static void collocate_one_grid_level(
             /*grid=*/my_grid);
 
       } // end of task loop
-    }   // end of block loop
+    } // end of block loop
 
 // While there should be an implicit barrier at the end of the block loop, this
 // explicit barrier eliminates occasional seg faults with icc compiled binaries.
@@ -370,6 +406,7 @@ static void collocate_one_grid_level(
       const int lb = (npts_local_total * rank) / actual_group_size;
       const int ub = (npts_local_total * (rank + 1)) / actual_group_size;
       if (src_thread < nthreads) {
+        GRID_PRAGMA_SIMD_LOOP
         for (int i = lb; i < ub; i++) {
           task_list->threadlocals[dest_thread][i] +=
               task_list->threadlocals[src_thread][i];
@@ -381,6 +418,7 @@ static void collocate_one_grid_level(
     // Copy final result from first thread into shared grid.
     const int lb = (npts_local_total * ithread) / nthreads;
     const int ub = (npts_local_total * (ithread + 1)) / nthreads;
+    GRID_PRAGMA_SIMD_LOOP
     for (int i = lb; i < ub; i++) {
       grid->host_buffer[i] = task_list->threadlocals[0][i];
     }
@@ -393,10 +431,15 @@ static void collocate_one_grid_level(
  *        See grid_task_list.h for details.
  * \author Ole Schuett
  ******************************************************************************/
-void grid_ref_collocate_task_list(const grid_ref_task_list *task_list,
+void grid_ref_collocate_task_list(const grid_ref_task_list *ptr,
                                   const enum grid_func func, const int nlevels,
                                   const offload_buffer *pab_blocks,
                                   offload_buffer *grids[nlevels]) {
+
+  if (ptr == NULL)
+    return;
+
+  grid_ref_task_list_internal *task_list = (grid_ref_task_list_internal *)ptr;
 
   assert(task_list->nlevels == nlevels);
 
@@ -460,12 +503,17 @@ static inline void store_hab(const grid_basis_set *ibasis,
  * \author Ole Schuett
  ******************************************************************************/
 static void integrate_one_grid_level(
-    const grid_ref_task_list *task_list, const int *first_block_task,
+    const grid_ref_task_list *ptr, const int *first_block_task,
     const int *last_block_task, const bool compute_tau, const int natoms,
     const int npts_global[3], const int npts_local[3], const int shift_local[3],
     const int border_width[3], const double dh[3][3], const double dh_inv[3][3],
     const offload_buffer *pab_blocks, const offload_buffer *grid,
     offload_buffer *hab_blocks, double forces[natoms][3], double virial[3][3]) {
+
+  if (ptr == NULL)
+    return;
+
+  grid_ref_task_list_internal *task_list = (grid_ref_task_list_internal *)ptr;
 
 // Using default(shared) because with GCC 9 the behavior around const changed:
 // https://www.gnu.org/software/gcc/gcc-9/porting_to.html
@@ -477,8 +525,8 @@ static void integrate_one_grid_level(
     bool old_transpose = false;
 
     // Matrix pab and hab are re-used across tasks.
-    double pab[task_list->maxco * task_list->maxco];
-    double hab[task_list->maxco * task_list->maxco];
+    double pab[imax(task_list->maxco * task_list->maxco, 1)];
+    double hab[imax(task_list->maxco * task_list->maxco, 1)];
 
     // Parallelize over blocks to avoid concurred access to hab_blocks.
     const int nthreads = omp_get_num_threads();
@@ -609,11 +657,14 @@ static void integrate_one_grid_level(
  * \author Ole Schuett
  ******************************************************************************/
 void grid_ref_integrate_task_list(
-    const grid_ref_task_list *task_list, const bool compute_tau,
-    const int natoms, const int nlevels, const offload_buffer *pab_blocks,
+    const grid_ref_task_list *ptr, const bool compute_tau, const int natoms,
+    const int nlevels, const offload_buffer *pab_blocks,
     const offload_buffer *grids[nlevels], offload_buffer *hab_blocks,
     double forces[natoms][3], double virial[3][3]) {
+  if (ptr == NULL)
+    return;
 
+  grid_ref_task_list_internal *task_list = (grid_ref_task_list_internal *)ptr;
   assert(task_list->nlevels == nlevels);
   assert(task_list->natoms == natoms);
 

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -40,7 +40,8 @@ MODULE particle_types
       ! Particle dependent terms for shell-model
       INTEGER                               :: atom_index = 0, &
                                                t_region_index = 0, &
-                                               shell_index = 0
+                                               shell_index = 0, &
+                                               fragment_index = 0
    END TYPE particle_type
 
    ! Public data types

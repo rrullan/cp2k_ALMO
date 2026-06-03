@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -33,7 +33,8 @@ MODULE lri_environment_init
                                               lri_env_create,&
                                               lri_environment_type
    USE mathconstants,                   ONLY: fac,&
-                                              pi
+                                              pi,&
+                                              rootpi
    USE mathlib,                         ONLY: invert_matrix
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
@@ -282,7 +283,6 @@ CONTAINS
          CALL get_qs_env(qs_env=qs_env, natom=natom)
          ! initialize pointers to RI basis vector
          ALLOCATE (lri_env%ri_fit%bas_ptr(2, natom))
-         ALLOCATE (kind_of(natom))
          CALL get_atomic_kind_set(atomic_kind_set, kind_of=kind_of)
          nbas = 0
          DO iat = 1, natom
@@ -388,7 +388,7 @@ CONTAINS
                   lri_env%bas_prop(ikind)%ri_index => ri_index
                   ALLOCATE (lri_env%bas_prop(ikind)%ovlp3(orb_basis%nsgf, orb_basis%nsgf, ri_basis%nsgf))
                   ALLOCATE (dovlp3(orb_basis%nsgf, orb_basis%nsgf, ri_basis%nsgf, 3))
-                  CALL int_overlap_aba_shg(lri_env%bas_prop(ikind)%ovlp3, dovlp3, (/0.0_dp, 0.0_dp, 0.0_dp/), &
+                  CALL int_overlap_aba_shg(lri_env%bas_prop(ikind)%ovlp3, dovlp3, [0.0_dp, 0.0_dp, 0.0_dp], &
                                            orb_basis, orb_basis, ri_basis, scon_orb, &
                                            scon_mix, orb_index, ri_index, &
                                            lri_env%cg_shg%cg_coeff, &
@@ -474,7 +474,7 @@ CONTAINS
          DO ishell = 1, basis%nshell(iset)
             l = basis%l(ishell, iset)
             expa = 0.5_dp*REAL(2*l + 3, dp)
-            ppl = fac(2*l + 2)*SQRT(pi)/2._dp**REAL(2*l + 3, dp)/fac(l + 1)
+            ppl = fac(2*l + 2)*rootpi/2._dp**REAL(2*l + 3, dp)/fac(l + 1)
             DO isgf = basis%first_sgf(ishell, iset), basis%last_sgf(ishell, iset)
                DO ipgf = 1, basis%npgf(iset)
                   cci = basis%gcc(ipgf, ishell, iset)
@@ -561,7 +561,7 @@ CONTAINS
                   IF (li == lj) THEN
                      l = li
                      expa = 0.5_dp*REAL(2*l + 3, dp)
-                     ppl = fac(2*l + 2)*SQRT(pi)/2._dp**REAL(2*l + 3, dp)/fac(l + 1)
+                     ppl = fac(2*l + 2)*rootpi/2._dp**REAL(2*l + 3, dp)/fac(l + 1)
                      DO isgf = basis%first_sgf(ishell, iset), basis%last_sgf(ishell, iset)
                         m_i = basis%m(isgf)
                         DO jsgf = basis%first_sgf(jshell, jset), basis%last_sgf(jshell, jset)

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,14 +16,21 @@ MODULE topology
    USE cell_methods,                    ONLY: cell_create,&
                                               read_cell,&
                                               write_cell
-   USE cell_types,                      ONLY: cell_retain,&
+   USE cell_types,                      ONLY: cell_clone,&
+                                              cell_release,&
+                                              cell_retain,&
+                                              cell_transform_input_cartesian,&
                                               cell_type
-   USE colvar_types,                    ONLY: colvar_p_type
+   USE colvar_types,                    ONLY: colvar_p_type,&
+                                              colvar_setup,&
+                                              combine_colvar_id
    USE colvar_utils,                    ONLY: post_process_colvar
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
+   USE cp_subsys_types,                 ONLY: cp_subsys_set,&
+                                              cp_subsys_type
    USE exclusion_types,                 ONLY: exclusion_type
    USE input_constants,                 ONLY: &
         do_conn_amb7, do_conn_g87, do_conn_g96, do_conn_generate, do_conn_mol_set, do_conn_off, &
@@ -95,7 +102,7 @@ MODULE topology
 
    PRIVATE
 
-! *** Public parameters ***
+   ! Public parameters
    PUBLIC :: topology_control, &
              connectivity_control
 
@@ -118,10 +125,12 @@ CONTAINS
 !> \param use_motion_section ...
 !> \param exclusions ...
 !> \param elkind ...
+!> \param subsys ...
 ! **************************************************************************************************
    SUBROUTINE topology_control(atomic_kind_set, particle_set, molecule_kind_set, &
                                molecule_set, colvar_p, gci, root_section, para_env, qmmm, qmmm_env, &
-                               force_env_section, subsys_section, use_motion_section, exclusions, elkind)
+                               force_env_section, subsys_section, use_motion_section, &
+                               exclusions, elkind, subsys)
 
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
@@ -138,21 +147,24 @@ CONTAINS
       TYPE(exclusion_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: exclusions
       LOGICAL, INTENT(IN), OPTIONAL                      :: elkind
+      TYPE(cp_subsys_type), OPTIONAL, POINTER            :: subsys
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'topology_control'
 
       INTEGER                                            :: handle, iw, iw2
       LOGICAL                                            :: binary_coord_read, el_as_kind, explicit, &
-                                                            my_qmmm
+                                                            my_qmmm, use_ref_cell
+      TYPE(cell_type), POINTER                           :: my_cell, my_cell_ref
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(section_vals_type), POINTER                   :: cell_section, constraint_section, &
+      TYPE(section_vals_type), POINTER                   :: cell_ref_section, cell_section, &
+                                                            constraint_section, fragment_section, &
                                                             topology_section
       TYPE(topology_parameters_type)                     :: topology
 
       NULLIFY (logger)
       logger => cp_get_default_logger()
       CALL timeset(routineN, handle)
-      NULLIFY (cell_section, constraint_section, topology_section)
+      NULLIFY (cell_section, cell_ref_section, constraint_section, topology_section, fragment_section)
 
       cell_section => section_vals_get_subs_vals(subsys_section, "CELL")
       IF (use_motion_section) THEN
@@ -179,10 +191,25 @@ CONTAINS
       CALL init_topology(topology)
 
       ! 2. Get the cell info
-      CALL read_cell(topology%cell, topology%cell_ref, cell_section=cell_section, &
-                     para_env=para_env)
-      CALL write_cell(topology%cell, subsys_section, tag="CELL_TOP")
+      NULLIFY (my_cell, my_cell_ref)
+      CALL read_cell(my_cell, my_cell_ref, cell_section=cell_section, &
+                     topology_section=topology_section, para_env=para_env)
+      use_ref_cell = .FALSE.
+      cell_ref_section => section_vals_get_subs_vals(cell_section, "CELL_REF")
+      CALL section_vals_get(cell_ref_section, explicit=use_ref_cell)
+      IF (.NOT. ASSOCIATED(topology%cell)) CALL cell_create(topology%cell)
+      IF (.NOT. ASSOCIATED(topology%cell_ref)) CALL cell_create(topology%cell_ref)
+      CALL cell_clone(my_cell, topology%cell)
+      CALL cell_clone(my_cell_ref, topology%cell_ref)
       CALL setup_cell_muc(topology%cell_muc, topology%cell, subsys_section)
+      IF (PRESENT(subsys)) THEN ! subsys is passed from cp_subsys_create
+         CALL cp_subsys_set(subsys, cell=my_cell, cell_ref=my_cell_ref, &
+                            use_ref_cell=use_ref_cell)
+      END IF
+      CALL write_cell(my_cell, subsys_section, tag="CELL")
+      CALL write_cell(my_cell_ref, subsys_section, tag="CELL_REF")
+      CALL cell_release(my_cell)
+      CALL cell_release(my_cell_ref)
 
       ! 3. Read in the topology section in the input file if any
       CALL read_topology_section(topology, topology_section)
@@ -259,12 +286,19 @@ CONTAINS
       END IF
       CALL cp_print_key_finished_output(iw2, logger, subsys_section, &
                                         "TOPOLOGY%DUMP_PSF")
+      !13. Read fragmentation
+      fragment_section => section_vals_get_subs_vals(subsys_section, "TOPOLOGY%FRAGMENTS")
+      CALL section_vals_get(fragment_section, explicit=explicit)
+      IF (explicit) THEN
+         CALL read_fragments(topology, subsys_section, particle_set=particle_set)
+      END IF
 
       !13. Cleanup the topology structure type
       CALL deallocate_topology(topology)
       CALL timestop(handle)
       CALL cp_print_key_finished_output(iw, logger, subsys_section, &
                                         "PRINT%TOPOLOGY_INFO")
+
    END SUBROUTINE topology_control
 
 ! **************************************************************************************************
@@ -434,6 +468,40 @@ CONTAINS
                                         "PRINT%TOPOLOGY_INFO")
 
    END SUBROUTINE connectivity_control
+! **************************************************************************************************
+!> \brief Reads fragments from input file
+!> \param topology ...
+!> \param subsys_section ...
+!> \param particle_set ...
+! **************************************************************************************************
+   SUBROUTINE read_fragments(topology, subsys_section, particle_set)
+
+      TYPE(topology_parameters_type), INTENT(INOUT)      :: topology
+      TYPE(section_vals_type), POINTER                   :: subsys_section
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+
+      INTEGER                                            :: i_rep, ifrag, n_rep
+      INTEGER, DIMENSION(:), POINTER                     :: frag_range
+      TYPE(section_vals_type), POINTER                   :: section
+
+      NULLIFY (section)
+      NULLIFY (frag_range)
+
+      section => section_vals_get_subs_vals(subsys_section, "TOPOLOGY%FRAGMENTS")
+      section => section_vals_get_subs_vals(section, "FRAGMENT")
+      CALL section_vals_get(section, n_repetition=n_rep)
+      ALLOCATE (topology%fragments(n_rep))
+
+      DO i_rep = 1, n_rep
+         CALL section_vals_val_get(section, "FRAG_RANGE", i_vals=frag_range, i_rep_section=i_rep)
+         topology%fragments(i_rep)%frag_start = frag_range(1)
+         topology%fragments(i_rep)%frag_end = frag_range(2)
+         DO ifrag = topology%fragments(i_rep)%frag_start, topology%fragments(i_rep)%frag_end
+            particle_set(ifrag)%fragment_index = i_rep
+         END DO
+      END DO
+
+   END SUBROUTINE read_fragments
 
 ! **************************************************************************************************
 !> \brief Reads connectivity from file
@@ -536,8 +604,6 @@ CONTAINS
       NULLIFY (global_section)
       global_section => section_vals_get_subs_vals(root_section, "GLOBAL")
       CALL section_vals_val_get(global_section, "SAVE_MEM", l_val=save_mem)
-
-      !-----------------------------------------------------------------------------
       !-----------------------------------------------------------------------------
       ! 1. If reading in from external file, make sure its there first
       !-----------------------------------------------------------------------------
@@ -556,7 +622,6 @@ CONTAINS
          END IF
       END IF
       !-----------------------------------------------------------------------------
-      !-----------------------------------------------------------------------------
       ! 2. Read in the coordinates from the corresponding locations
       !-----------------------------------------------------------------------------
       CALL timeset(routineN//"_READ_COORDINATE", handle2)
@@ -565,12 +630,16 @@ CONTAINS
          ! Do nothing.. we will parse later from the &COORD section..
       CASE (do_coord_g96)
          CALL read_coordinate_g96(topology, para_env, subsys_section)
+         CALL transform_external_cartesian_coordinates(topology)
       CASE (do_coord_crd)
          CALL read_coordinate_crd(topology, para_env, subsys_section)
+         CALL transform_external_cartesian_coordinates(topology)
       CASE (do_coord_pdb)
          CALL read_coordinate_pdb(topology, para_env, subsys_section)
+         CALL transform_external_cartesian_coordinates(topology)
       CASE (do_coord_xyz)
          CALL read_coordinate_xyz(topology, para_env, subsys_section)
+         CALL transform_external_cartesian_coordinates(topology)
       CASE (do_coord_cif)
          CALL read_coordinate_cif(topology, para_env, subsys_section)
       CASE (do_coord_xtl)
@@ -599,6 +668,24 @@ CONTAINS
    END SUBROUTINE coordinate_control
 
 ! **************************************************************************************************
+!> \brief Transform Cartesian coordinates read from external files to the internal cell frame.
+!> \param topology ...
+! **************************************************************************************************
+   SUBROUTINE transform_external_cartesian_coordinates(topology)
+
+      TYPE(topology_parameters_type), INTENT(INOUT)      :: topology
+
+      INTEGER                                            :: iatom
+
+      IF (.NOT. ASSOCIATED(topology%cell_muc)) RETURN
+
+      DO iatom = 1, topology%natoms
+         CALL cell_transform_input_cartesian(topology%cell_muc, topology%atom_info%r(:, iatom))
+      END DO
+
+   END SUBROUTINE transform_external_cartesian_coordinates
+
+! **************************************************************************************************
 !> \brief ...
 !> \param colvar_p ...
 !> \param particle_set ...
@@ -611,11 +698,18 @@ CONTAINS
       TYPE(colvar_p_type), DIMENSION(:), POINTER         :: colvar_p
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
 
-      INTEGER                                            :: i
+      INTEGER                                            :: i, j
 
       IF (ASSOCIATED(colvar_p)) THEN
          DO i = 1, SIZE(colvar_p)
-            CALL post_process_colvar(colvar_p(i)%colvar, particle_set)
+            IF (colvar_p(i)%colvar%type_id == combine_colvar_id) THEN
+               DO j = 1, SIZE(colvar_p(i)%colvar%combine_cvs_param%colvar_p)
+                  CALL post_process_colvar(colvar_p(i)%colvar%combine_cvs_param%colvar_p(j)%colvar, particle_set)
+               END DO
+               CALL colvar_setup(colvar_p(i)%colvar)
+            ELSE
+               CALL post_process_colvar(colvar_p(i)%colvar, particle_set)
+            END IF
          END DO
       END IF
    END SUBROUTINE topology_post_proc_colvar

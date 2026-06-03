@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,6 +24,11 @@ MODULE rt_propagation_types
                                               cite_reference
    USE cp_control_types,                ONLY: dft_control_type,&
                                               rtp_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_create,&
+                                              dbcsr_deallocate_matrix,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
    USE cp_fm_pool_types,                ONLY: cp_fm_pool_p_type,&
@@ -36,11 +41,6 @@ MODULE rt_propagation_types
                                               cp_fm_release,&
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_to_string
-   USE dbcsr_api,                       ONLY: dbcsr_create,&
-                                              dbcsr_deallocate_matrix,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_type
    USE kinds,                           ONLY: dp
    USE qs_matrix_pools,                 ONLY: mpools_get,&
                                               qs_matrix_pools_type
@@ -87,8 +87,16 @@ MODULE rt_propagation_types
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)     :: SinvH => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)     :: SinvH_imag => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)     :: SinvB => NULL()
+      ! Matrix of local moments - may not be updated if ions are fixed
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)     :: local_moments => NULL()
+      TYPE(dbcsr_type), POINTER                     :: local_moments_work => NULL()
       TYPE(rtp_rho_type), POINTER                   :: rho => NULL()
       TYPE(rtp_mos_type), POINTER                   :: mos => NULL()
+      ! Moment trace, Indices : Spin, direction, time index
+      COMPLEX(KIND=dp), DIMENSION(:, :, :), POINTER   :: moments => NULL()
+      ! Fields do not have a spin index
+      COMPLEX(KIND=dp), DIMENSION(:, :), POINTER     :: fields => NULL()
+      REAL(KIND=dp), DIMENSION(:), POINTER          :: times => NULL()
       REAL(KIND=dp)                                 :: energy_old = 0.0_dp
       REAL(KIND=dp)                                 :: energy_new = 0.0_dp
       REAL(KIND=dp)                                 :: dt = 0.0_dp
@@ -537,7 +545,7 @@ CONTAINS
       history => rtp%history
 
       NULLIFY (history%rho_history, history%mo_history, history%s_history)
-      IF (aspc_order .GT. 0) THEN
+      IF (aspc_order > 0) THEN
          IF (rtp%linear_scaling) THEN
             nmat = SIZE(rtp%rho%new)
             CALL dbcsr_allocate_matrix_set(history%rho_history, nmat, aspc_order)

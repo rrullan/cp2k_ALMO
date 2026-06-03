@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -47,22 +47,29 @@ MODULE negf_control_types
    TYPE negf_control_contact_type
       !> atoms belonging to bulk and screening regions
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atomlist_bulk, atomlist_screening
-      !> atom belonging to the primary and secondary bulk unit cells
+      !> atoms belonging to the primary and secondary bulk unit cells
       TYPE(negf_allocatable_ivector), ALLOCATABLE, &
          DIMENSION(:)                                    :: atomlist_cell
       !> index of the sub_force_env which should be used for bulk calculation
-      INTEGER                                            :: force_env_index
-      !> contact Fermi level needs to be computed prior NEGF run
-      LOGICAL                                            :: compute_fermi_level
-      !> when computing contact Fermi level, use the energy given in 'fermi_level' (instead of HOMO)
-      !> (instead of the HOMO energy) as a starting point
-      LOGICAL                                            :: refine_fermi_level
-      !> Fermi level
-      REAL(kind=dp)                                      :: fermi_level
+      INTEGER                                            :: force_env_index = -1
+      !> contact Fermi level needs to be computed
+      LOGICAL                                            :: compute_fermi_level = .FALSE.
+      !> to refine contact Fermi level using NEGF
+      LOGICAL                                            :: refine_fermi_level = .FALSE.
+      !> to shift energies to common zero level
+      LOGICAL                                            :: shift_fermi_level = .FALSE.
+      !> to read/write H and S from/to file
+      LOGICAL                                            :: read_write_HS = .FALSE.
+      !> if restart from files is really done
+      LOGICAL                                            :: is_restart = .FALSE.
+      !> Fermi level or starting Fermi level
+      REAL(kind=dp)                                      :: fermi_level = -1.0_dp
+      !> Fermi level shifted to the common zero-energy level
+      REAL(kind=dp)                                      :: fermi_level_shifted = -1.0_dp
       !> temperature [in a.u.]
-      REAL(kind=dp)                                      :: temperature
+      REAL(kind=dp)                                      :: temperature = -1.0_dp
       !> applied electric potential
-      REAL(kind=dp)                                      :: v_external
+      REAL(kind=dp)                                      :: v_external = 0.0_dp
    END TYPE negf_control_contact_type
 
 ! **************************************************************************************************
@@ -78,44 +85,56 @@ MODULE negf_control_types
       !> atoms belonging to the scattering region as well as atoms belonging to
       !> screening regions of all the contacts
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atomlist_S_screening
+      !> to read/write H and S from/to file
+      LOGICAL                                            :: read_write_HS = .FALSE.
+      !> to update the atomic Hamiltonian during NEGF self-consistent cycle
+      LOGICAL                                            :: update_HS = .TRUE.
+      !> if NEGF SCF id restart from saved files
+      LOGICAL                                            :: restart_scf = .TRUE.
+      !> if dft of entire system is done
+      LOGICAL                                            :: is_dft_entire = .FALSE.
+      !> if restart from files is really done
+      LOGICAL                                            :: is_restart = .FALSE.
+      !> the common restart file projectname-negf.restart is written if any of is_restart is .TRUE.
+      LOGICAL                                            :: write_common_restart_file = .FALSE.
       !> do not keep contact self-energy matrices
-      LOGICAL                                            :: disable_cache
+      LOGICAL                                            :: disable_cache = .FALSE.
       !> convergence criteria for adaptive integration methods
-      REAL(kind=dp)                                      :: conv_density
+      REAL(kind=dp)                                      :: conv_density = -1.0_dp
       !> convergence criteria for iterative Lopez-Sancho algorithm
-      REAL(kind=dp)                                      :: conv_green
+      REAL(kind=dp)                                      :: conv_green = -1.0_dp
       !> convergence criteria for self-consistent iterations
-      REAL(kind=dp)                                      :: conv_scf
+      REAL(kind=dp)                                      :: conv_scf = -1.0_dp
       !> accuracy in mapping atoms between different force environments
-      REAL(kind=dp)                                      :: eps_geometry
+      REAL(kind=dp)                                      :: eps_geometry = -1.0_dp
       !> applied bias [in a.u.]
-      REAL(kind=dp)                                      :: v_bias
+      REAL(kind=dp)                                      :: v_bias = -1.0_dp
       !> integration lower bound [in a.u.]
-      REAL(kind=dp)                                      :: energy_lbound
+      REAL(kind=dp)                                      :: energy_lbound = -1.0_dp
       !> infinitesimal offset along the imaginary axis [in a.u.]
-      REAL(kind=dp)                                      :: eta
+      REAL(kind=dp)                                      :: eta = -1.0_dp
       !> initial guess to determine the actual Fermi level of bulk contacts [in a.u.]
-      REAL(kind=dp)                                      :: homo_lumo_gap
+      REAL(kind=dp)                                      :: homo_lumo_gap = -1.0_dp
       !> number of residuals (poles of the Fermi function)
-      INTEGER                                            :: delta_npoles
+      INTEGER                                            :: delta_npoles = -1
       !> offset along the x-axis away from the poles of the Fermi function [in units of kT]
-      INTEGER                                            :: gamma_kT
+      INTEGER                                            :: gamma_kT = -1
       !> integration method
-      INTEGER                                            :: integr_method
+      INTEGER                                            :: integr_method = -1
       !> minimal number of grid points along the closed contour
-      INTEGER                                            :: integr_min_points
+      INTEGER                                            :: integr_min_points = -1
       !> maximal number of grid points along the closed contour
-      INTEGER                                            :: integr_max_points
+      INTEGER                                            :: integr_max_points = -1
       !> maximal number of SCF iterations
-      INTEGER                                            :: max_scf
+      INTEGER                                            :: max_scf = -1
       !> minimal number of MPI processes to be used to compute Green's function per energy point
-      INTEGER                                            :: nprocs
+      INTEGER                                            :: nprocs = -1
       !> shift in Hartree potential [in a.u.]
-      REAL(kind=dp)                                      :: v_shift
+      REAL(kind=dp)                                      :: v_shift = -1.0_dp
       !> initial offset to determine the correct shift in Hartree potential [in a.u.]
-      REAL(kind=dp)                                      :: v_shift_offset
+      REAL(kind=dp)                                      :: v_shift_offset = -1.0_dp
       !> maximal number of iteration to determine the shift in Hartree potential
-      INTEGER                                            :: v_shift_maxiters
+      INTEGER                                            :: v_shift_maxiters = -1
    END TYPE negf_control_type
 
    PRIVATE :: read_negf_atomlist
@@ -210,7 +229,8 @@ CONTAINS
       LOGICAL                                            :: do_negf, is_explicit
       REAL(kind=dp)                                      :: eta_max, temp_current, temp_min
       TYPE(section_vals_type), POINTER                   :: cell_section, contact_section, &
-                                                            negf_section, region_section
+                                                            negf_section, region_section, &
+                                                            subsection
 
       CALL timeset(routineN, handle)
 
@@ -286,19 +306,14 @@ CONTAINS
          CALL section_vals_val_get(contact_section, "FERMI_LEVEL", &
                                    r_val=negf_control%contacts(i_rep)%fermi_level, &
                                    i_rep_section=i_rep, explicit=is_explicit)
+         IF (.NOT. is_explicit) negf_control%contacts(i_rep)%refine_fermi_level = .FALSE.
          negf_control%contacts(i_rep)%compute_fermi_level = (.NOT. is_explicit) .OR. &
                                                             negf_control%contacts(i_rep)%refine_fermi_level
 
-         IF (do_negf .AND. negf_control%contacts(i_rep)%force_env_index <= 0 .AND. &
-             (.NOT. (is_explicit .OR. negf_control%contacts(i_rep)%refine_fermi_level))) THEN
-            WRITE (contact_id_str, '(I11)') i_rep
-            CALL cp_warn(__LOCATION__, &
-                         "There is no way to reasonably guess the Fermi level for the bulk contact "// &
-                         TRIM(ADJUSTL(contact_id_str))//" without running a separate bulk DFT calculation first. "// &
-                         "Therefore, 0.0 Hartree will be used as an initial guess. It is strongly advised to enable "// &
-                         "the REFINE_FERMI_LEVEL switch and to provide an initial guess using the FERMI_LEVEL keyword. "// &
-                         "Alternatively, a bulk FORCE_EVAL_SECTION can be set up.")
-         END IF
+         CALL section_vals_val_get(contact_section, "FERMI_LEVEL_SHIFTED", &
+                                   r_val=negf_control%contacts(i_rep)%fermi_level_shifted, &
+                                   i_rep_section=i_rep, explicit=is_explicit)
+         IF (is_explicit) negf_control%contacts(i_rep)%shift_fermi_level = .TRUE.
 
          CALL section_vals_val_get(contact_section, "TEMPERATURE", &
                                    r_val=negf_control%contacts(i_rep)%temperature, &
@@ -310,6 +325,14 @@ CONTAINS
          CALL section_vals_val_get(contact_section, "ELECTRIC_POTENTIAL", &
                                    r_val=negf_control%contacts(i_rep)%v_external, &
                                    i_rep_section=i_rep)
+
+         subsection => section_vals_get_subs_vals(contact_section, "RESTART", i_rep_section=i_rep)
+
+         CALL section_vals_val_get(subsection, "READ_WRITE_HS", &
+                                   l_val=negf_control%contacts(i_rep)%read_write_HS, &
+                                   explicit=is_explicit)
+         IF (is_explicit) negf_control%contacts(i_rep)%read_write_HS = .TRUE.
+
       END DO
 
       region_section => section_vals_get_subs_vals(negf_section, "SCATTERING_REGION")
@@ -317,6 +340,12 @@ CONTAINS
       IF (is_explicit) THEN
          CALL read_negf_atomlist(negf_control%atomlist_S, region_section, 1, subsys)
       END IF
+
+      subsection => section_vals_get_subs_vals(negf_section, "SCATTERING_REGION%RESTART")
+      CALL section_vals_val_get(subsection, "READ_WRITE_HS", &
+                                l_val=negf_control%read_write_HS, &
+                                explicit=is_explicit)
+      IF (is_explicit) negf_control%read_write_HS = .TRUE.
 
       CALL section_vals_val_get(negf_section, "DISABLE_CACHE", l_val=negf_control%disable_cache)
 
@@ -346,6 +375,9 @@ CONTAINS
       CALL section_vals_val_get(negf_section, "V_SHIFT", r_val=negf_control%v_shift)
       CALL section_vals_val_get(negf_section, "V_SHIFT_OFFSET", r_val=negf_control%v_shift_offset)
       CALL section_vals_val_get(negf_section, "V_SHIFT_MAX_ITERS", i_val=negf_control%v_shift_maxiters)
+
+      CALL section_vals_val_get(negf_section, "SCF%UPDATE_HS", l_val=negf_control%update_HS)
+      CALL section_vals_val_get(negf_section, "SCF%RESTART_SCF", l_val=negf_control%restart_scf)
 
       ! check consistency
       IF (negf_control%eta < 0.0_dp) THEN
@@ -493,7 +525,7 @@ CONTAINS
       CALL section_vals_val_get(input_section, "MOLNAME", i_rep_section=i_rep_section, &
                                 n_rep_val=nrep_molname, explicit=is_molname)
 
-      ! compute the number of atoms in the NEGF region, and check the validity of giben atomic indices
+      ! compute the number of atoms in the NEGF region, and check the validity of given atomic indices
       natoms_total = 0
       IF (is_list .AND. nrep_list > 0) THEN
          DO irep = 1, nrep_list
@@ -522,7 +554,7 @@ CONTAINS
 
             DO iname = 1, nnames
                DO ikind = 1, nkinds
-                  IF (molecule_kind_set(ikind)%name .EQ. cptr(iname)) EXIT
+                  IF (molecule_kind_set(ikind)%name == cptr(iname)) EXIT
                END DO
 
                IF (ikind <= nkinds) THEN
@@ -567,7 +599,7 @@ CONTAINS
 
                DO iname = 1, nnames
                   DO ikind = 1, nkinds
-                     IF (molecule_kind_set(ikind)%name .EQ. cptr(iname)) EXIT
+                     IF (molecule_kind_set(ikind)%name == cptr(iname)) EXIT
                   END DO
 
                   IF (ikind <= nkinds) THEN

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -39,12 +39,15 @@ MODULE qs_charges_types
 !> \author Fawzi Mohamed
 ! **************************************************************************************************
    TYPE qs_charges_type
-      REAL(KIND=dp) :: total_rho_core_rspace, total_rho_gspace
-      REAL(KIND=dp) :: total_rho0_soft_rspace, total_rho0_hard_lebedev
-      REAL(KIND=dp) :: total_rho_soft_gspace
-      REAL(KIND=dp), DIMENSION(:), POINTER  :: total_rho1_hard, &
-                                               total_rho1_soft
-      REAL(KIND=dp) :: background
+      REAL(KIND=dp) :: total_rho_core_rspace = -1.0_dp, total_rho_gspace = -1.0_dp
+      REAL(KIND=dp) :: total_rho0_soft_rspace = -1.0_dp, total_rho0_hard_lebedev = -1.0_dp
+      REAL(KIND=dp) :: total_rho_soft_gspace = -1.0_dp
+      REAL(KIND=dp), DIMENSION(:), POINTER  :: total_rho1_hard => NULL(), &
+                                               total_rho1_soft => NULL()
+      REAL(KIND=dp) :: total_rho1_hard_nuc = -1.0_dp
+      REAL(KIND=dp) :: total_rho1_soft_nuc_rspace = -1.0_dp
+      REAL(KIND=dp) :: total_rho1_soft_nuc_lebedev = -1.0_dp
+      REAL(KIND=dp) :: background = -1.0_dp
    END TYPE qs_charges_type
 
 CONTAINS
@@ -79,6 +82,9 @@ CONTAINS
       qs_charges%total_rho1_hard(:) = 0.0_dp
       ALLOCATE (qs_charges%total_rho1_soft(nspins))
       qs_charges%total_rho1_soft(:) = 0.0_dp
+      qs_charges%total_rho1_hard_nuc = 0.0_dp
+      qs_charges%total_rho1_soft_nuc_rspace = 0.0_dp
+      qs_charges%total_rho1_soft_nuc_lebedev = 0.0_dp
    END SUBROUTINE qs_charges_create
 
 ! **************************************************************************************************

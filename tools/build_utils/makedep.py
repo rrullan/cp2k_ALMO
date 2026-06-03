@@ -123,9 +123,7 @@ $(LIBDIR)/{archive}{ext} : {objs}
 # Public modules for package {pkg}
 install: PUBLICFILES += {pubfiles}
 
-""".format(
-                pkg=pkg, pubfiles=" ".join(mod for mod in packages[pkg]["public"])
-            )
+""".format(pkg=pkg, pubfiles=" ".join(mod for mod in packages[pkg]["public"]))
 
     # write rules for executables
     archive_postfix = archive_ext.rsplit(".", 1)[0]
@@ -319,7 +317,7 @@ def collect_include_deps(parsed_files, fn, src_dir):
             incs.append(fn_inc)
             incs += collect_include_deps(parsed_files, fn_inc, src_dir)
 
-    return list(set(incs))
+    return sorted(set(incs))
 
 
 # ============================================================================
@@ -337,7 +335,7 @@ def collect_use_deps(parsed_files, fn, src_dir):
         if fn_inc in parsed_files.keys():
             uses += collect_use_deps(parsed_files, fn_inc, src_dir)
 
-    return list(set(uses))
+    return sorted(set(uses))
 
 
 # ============================================================================

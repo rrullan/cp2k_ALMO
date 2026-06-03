@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,14 +20,14 @@ MODULE qs_operators_ao
    USE block_p_types,                   ONLY: block_p_type
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_type
-   USE dbcsr_api,                       ONLY: dbcsr_get_block_p,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_get_block_p,&
                                               dbcsr_get_matrix_type,&
                                               dbcsr_has_symmetry,&
                                               dbcsr_p_type,&
                                               dbcsr_type_antisymmetric,&
                                               dbcsr_type_no_symmetry
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE mathconstants,                   ONLY: pi
@@ -398,17 +398,17 @@ CONTAINS
                   !
                   ! (a|p_x|b) = 2*a*(a+1x|b) - N_x(a)*(a-1_x|b)
                   dumx = 2.0_dp*zeta(ipgf)*rr(ax + 1, bx, 1)
-                  IF (ax .GT. 0) dumx = dumx - REAL(ax, dp)*rr(ax - 1, bx, 1)
+                  IF (ax > 0) dumx = dumx - REAL(ax, dp)*rr(ax - 1, bx, 1)
                   intab(ma, mb, 1) = f0*dumx*rr(ay, by, 2)*rr(az, bz, 3)
                   !
                   ! (a|p_y|b)
                   dumy = 2.0_dp*zeta(ipgf)*rr(ay + 1, by, 2)
-                  IF (ay .GT. 0) dumy = dumy - REAL(ay, dp)*rr(ay - 1, by, 2)
+                  IF (ay > 0) dumy = dumy - REAL(ay, dp)*rr(ay - 1, by, 2)
                   intab(ma, mb, 2) = f0*rr(ax, bx, 1)*dumy*rr(az, bz, 3)
                   !
                   ! (a|p_z|b)
                   dumz = 2.0_dp*zeta(ipgf)*rr(az + 1, bz, 3)
-                  IF (az .GT. 0) dumz = dumz - REAL(az, dp)*rr(az - 1, bz, 3)
+                  IF (az > 0) dumz = dumz - REAL(az, dp)*rr(az - 1, bz, 3)
                   intab(ma, mb, 3) = f0*rr(ax, bx, 1)*rr(ay, by, 2)*dumz
                   !
                END DO
@@ -764,9 +764,9 @@ CONTAINS
                   dumx = -2.0_dp*zeta(ipgf)*rr(ax + 1, bx, 1)
                   dumy = -2.0_dp*zeta(ipgf)*rr(ay + 1, by, 2)
                   dumz = -2.0_dp*zeta(ipgf)*rr(az + 1, bz, 3)
-                  IF (ax .GT. 0) dumx = dumx + REAL(ax, dp)*rr(ax - 1, bx, 1)
-                  IF (ay .GT. 0) dumy = dumy + REAL(ay, dp)*rr(ay - 1, by, 2)
-                  IF (az .GT. 0) dumz = dumz + REAL(az, dp)*rr(az - 1, bz, 3)
+                  IF (ax > 0) dumx = dumx + REAL(ax, dp)*rr(ax - 1, bx, 1)
+                  IF (ay > 0) dumy = dumy + REAL(ay, dp)*rr(ay - 1, by, 2)
+                  IF (az > 0) dumz = dumz + REAL(az, dp)*rr(az - 1, bz, 3)
                   !
                   ! (a|l_z|b)
                   intab(ma, mb, 1) = -f0*rr(ax, bx, 1)*( &
@@ -1392,7 +1392,7 @@ CONTAINS
       CPASSERT(ASSOCIATED(op))
       CPASSERT(ASSOCIATED(op_der))
       !IF(.NOT.op_sm_der(1,1)%matrix%symmetry=="none") THEN
-      IF (.NOT. dbcsr_get_matrix_type(op_der(1, 1)%matrix) .EQ. dbcsr_type_no_symmetry) THEN
+      IF (.NOT. dbcsr_get_matrix_type(op_der(1, 1)%matrix) == dbcsr_type_no_symmetry) THEN
          CPABORT("")
       END IF
 
@@ -1494,9 +1494,9 @@ CONTAINS
          zetb => basis_set_b%zet
 
          ldsa = SIZE(sphi_a, 1)
-         IF (ldsa .EQ. 0) CYCLE
+         IF (ldsa == 0) CYCLE
          ldsb = SIZE(sphi_b, 1)
-         IF (ldsb .EQ. 0) CYCLE
+         IF (ldsb == 0) CYCLE
          IF (inode == 1) last_jatom = 0
 
          IF (my_minimum_image) THEN

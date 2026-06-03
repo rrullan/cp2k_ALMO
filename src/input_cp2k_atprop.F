@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -46,23 +46,13 @@ CONTAINS
                           description="Controls the calculation of atomic properties. "// &
                           "Printing is controlled by FORCE_EVAL / PRINT / PROGRAM_RUN_INFO", &
                           repeats=.FALSE., &
-                          citations=(/Kikuchi2009/))
+                          citations=[Kikuchi2009])
 
       NULLIFY (keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="ENERGY", &
                           description="Calculate atomic energies ", &
                           usage="ENERGY {logical}", &
-                          repeats=.FALSE., &
-                          n_var=1, &
-                          default_l_val=.FALSE., &
-                          lone_keyword_l_val=.TRUE.)
-      CALL section_add_keyword(section, keyword)
-      CALL keyword_release(keyword)
-
-      CALL keyword_create(keyword, __LOCATION__, name="PRESSURE", &
-                          description="Calculate atomic pressure tensors ", &
-                          usage="PRESSURE {logical}", &
                           repeats=.FALSE., &
                           n_var=1, &
                           default_l_val=.FALSE., &

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -26,6 +26,8 @@ MODULE library_tests
    USE cp_blacs_env,                    ONLY: cp_blacs_env_create,&
                                               cp_blacs_env_release,&
                                               cp_blacs_env_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_reset_randmat_seed,&
+                                              dbcsr_run_tests
    USE cp_eri_mme_interface,            ONLY: cp_eri_mme_perf_acc_test
    USE cp_files,                        ONLY: close_file,&
                                               open_file
@@ -48,8 +50,6 @@ MODULE library_tests
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_init,          ONLY: init_input_type
-   USE dbcsr_api,                       ONLY: dbcsr_reset_randmat_seed,&
-                                              dbcsr_run_tests
    USE dbm_tests,                       ONLY: dbm_run_tests
    USE fft_tools,                       ONLY: BWFFT,&
                                               FFT_RADIX_CLOSEST,&
@@ -73,6 +73,7 @@ MODULE library_tests
    USE kinds,                           ONLY: dp
    USE machine,                         ONLY: m_flush,&
                                               m_walltime
+   USE mathconstants,                   ONLY: gaussi
    USE message_passing,                 ONLY: mp_para_env_type
    USE minimax_exp,                     ONLY: validate_exp_minimax
    USE mp2_grids,                       ONLY: test_least_square_ft
@@ -84,8 +85,7 @@ MODULE library_tests
                                               HALFSPACE,&
                                               pw_grid_type
    USE pw_grids,                        ONLY: pw_grid_create,&
-                                              pw_grid_release,&
-                                              pw_grid_setup
+                                              pw_grid_release
    USE pw_methods,                      ONLY: pw_transfer,&
                                               pw_zero
    USE pw_types,                        ONLY: pw_c1d_gs_type,&
@@ -564,7 +564,7 @@ CONTAINS
       INTEGER                                            :: iw, fftw_plan_type
       CHARACTER(LEN=*), INTENT(IN)                       :: wisdom_file
 
-      INTEGER, PARAMETER                                 :: ndate(3) = (/12, 48, 96/)
+      INTEGER, PARAMETER                                 :: ndate(3) = [12, 48, 96]
 
       INTEGER                                            :: iall, ierr, it, j, len, n(3), ntim, &
                                                             radix_in, radix_out, siz, stat
@@ -597,7 +597,7 @@ CONTAINS
          END SELECT
          n = 4
          zz = 0.0_dp
-         CALL fft3d(1, n, zz, status=stat)
+         CALL fft3d(FWFFT, n, zz, status=stat)
          IF (stat == 0) THEN
             DO it = 1, 3
                radix_in = ndate(it)
@@ -610,7 +610,7 @@ CONTAINS
                CALL RANDOM_NUMBER(ra)
                ca(:, :, :) = ra
                CALL RANDOM_NUMBER(ra)
-               ca(:, :, :) = ca + CMPLX(0.0_dp, 1.0_dp, KIND=dp)*ra
+               ca(:, :, :) = ca + gaussi*ra
                flops = REAL(len**3, KIND=dp)*15.0_dp*LOG(REAL(len, KIND=dp))
                ntim = NINT(siz*1.e7_dp/flops)
                ntim = MAX(ntim, 1)
@@ -619,7 +619,7 @@ CONTAINS
                tstart = m_walltime()
                DO j = 1, ntim
                   CALL fft3d(FWFFT, n, ca)
-                  CALL fft3d(BWFFT, n, ca, SCALE=scale)
+                  CALL fft3d(BWFFT, n, ca)
                END DO
                tend = m_walltime()
                t = tend - tstart + threshold
@@ -647,7 +647,7 @@ CONTAINS
             CALL RANDOM_NUMBER(ra)
             ca(:, :, :) = ra
             CALL RANDOM_NUMBER(ra)
-            ca(:, :, :) = ca + CMPLX(0.0_dp, 1.0_dp, KIND=dp)*ra
+            ca(:, :, :) = ca + gaussi*ra
             cc(:, :, :) = ca
             CALL fft3d(FWFFT, n, ca, cb)
             tdiff = MAXVAL(ABS(ca - cc))
@@ -727,16 +727,15 @@ CONTAINS
       ! .. set cell (should otherwise be irrelevant)
       NULLIFY (box)
       CALL cell_create(box)
-      box%hmat = RESHAPE((/20.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 20.0_dp, 0.0_dp, &
-                           0.0_dp, 0.0_dp, 20.0_dp/), (/3, 3/))
+      box%hmat = RESHAPE([20.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 20.0_dp, 0.0_dp, &
+                          0.0_dp, 0.0_dp, 20.0_dp], [3, 3])
       CALL init_cell(box)
 
       ! .. grid type and pw_grid
       NULLIFY (grid)
       CALL section_vals_val_get(rs_pw_transfer_section, "GRID", i_vals=i_vals)
       np = i_vals
-      CALL pw_grid_create(grid, para_env)
-      CALL pw_grid_setup(box%hmat, grid, grid_span=FULLSPACE, npts=np, fft_usage=.TRUE., iounit=iw)
+      CALL pw_grid_create(grid, para_env, box%hmat, grid_span=FULLSPACE, npts=np, fft_usage=.TRUE., iounit=iw)
       no = grid%npts
 
       CALL ca%create(grid)
@@ -746,7 +745,7 @@ CONTAINS
       CALL section_vals_val_get(rs_pw_transfer_section, "HALO_SIZE", i_val=halo_size)
       rs_grid_section => section_vals_get_subs_vals(rs_pw_transfer_section, "RS_GRID")
       ns_max = 2*halo_size + 1
-      CALL init_input_type(input_settings, ns_max, rs_grid_section, 1, (/-1, -1, -1/))
+      CALL init_input_type(input_settings, ns_max, rs_grid_section, 1, [-1, -1, -1])
 
       ! .. rs type
       NULLIFY (rs_desc)
@@ -841,8 +840,8 @@ CONTAINS
       !..the unit cell (should not really matter, the number of grid points do)
       NULLIFY (box, grid)
       CALL cell_create(box)
-      box%hmat = RESHAPE((/10.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 8.0_dp, 0.0_dp, &
-                           0.0_dp, 0.0_dp, 7.0_dp/), (/3, 3/))
+      box%hmat = RESHAPE([10.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 8.0_dp, 0.0_dp, &
+                          0.0_dp, 0.0_dp, 7.0_dp], [3, 3])
       CALL init_cell(box)
 
       CALL section_vals_get(pw_transfer_section, n_repetition=n_rep)
@@ -881,7 +880,7 @@ CONTAINS
                q = para_env%num_pe/p
                IF (p*q == para_env%num_pe) THEN
                   itmp = itmp + 1
-                  layouts(:, itmp) = (/p, q/)
+                  layouts(:, itmp) = [p, q]
                END IF
             END DO
          ELSE
@@ -893,8 +892,6 @@ CONTAINS
          DO i_layout = 1, SIZE(layouts, 2)
 
             distribution_layout = layouts(:, i_layout)
-
-            CALL pw_grid_create(grid, para_env)
 
             CALL section_vals_val_get(pw_transfer_section, "PW_GRID", i_rep_section=i_rep, i_val=itmp)
 
@@ -927,9 +924,9 @@ CONTAINS
             END IF
 
             ! actual setup
-            CALL pw_grid_setup(box%hmat, grid, grid_span=grid_span, odd=odd, spherical=spherical, &
-                               blocked=blocked_id, npts=np, fft_usage=.TRUE., &
-                               rs_dims=distribution_layout, iounit=iw)
+            CALL pw_grid_create(grid, para_env, box%hmat, grid_span=grid_span, odd=odd, spherical=spherical, &
+                                blocked=blocked_id, npts=np, fft_usage=.TRUE., &
+                                rs_dims=distribution_layout, iounit=iw)
 
             IF (iw > 0) CALL m_flush(iw)
 
@@ -1449,10 +1446,10 @@ CONTAINS
          CALL section_vals_val_get(input_section, "ALWAYS_CHECKSUM", i_rep_section=i_rep, l_val=always_checksum)
 
          CALL dbcsr_run_tests(para_env%get_handle(), iw, nproc, &
-                              (/m, n, k/), &
-                              (/transa_p, transb_p/), &
+                              [m, n, k], &
+                              [transa_p, transb_p], &
                               bs_m, bs_n, bs_k, &
-                              (/s_a, s_b, s_c/), &
+                              [s_a, s_b, s_c], &
                               alpha, beta, &
                               data_type=data_type, &
                               test_type=test_type, &
@@ -1505,12 +1502,12 @@ CONTAINS
 
          CALL dbm_run_tests(mp_group=para_env, &
                             io_unit=iw, &
-                            matrix_sizes=(/m, n, k/), &
-                            trs=(/transa_p, transb_p/), &
+                            matrix_sizes=[m, n, k], &
+                            trs=[transa_p, transb_p], &
                             bs_m=bs_m, &
                             bs_n=bs_n, &
                             bs_k=bs_k, &
-                            sparsities=(/s_a, s_b, s_c/), &
+                            sparsities=[s_a, s_b, s_c], &
                             alpha=alpha, &
                             beta=beta, &
                             n_loops=n_loop, &

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -39,14 +39,19 @@ MODULE cell_types
                                                cell_sym_hexagonal_gamma_120 = 10, &
                                                cell_sym_cubic = 11
 
-   INTEGER, PARAMETER, PUBLIC               :: use_perd_x = 0, &
-                                               use_perd_y = 1, &
-                                               use_perd_z = 2, &
-                                               use_perd_xy = 3, &
-                                               use_perd_xz = 4, &
-                                               use_perd_yz = 5, &
-                                               use_perd_xyz = 6, &
-                                               use_perd_none = 7
+   INTEGER, PARAMETER, PUBLIC               :: use_perd_none = 0, &
+                                               use_perd_x = 1, &
+                                               use_perd_y = 2, &
+                                               use_perd_z = 3, &
+                                               use_perd_xy = 4, &
+                                               use_perd_xz = 5, &
+                                               use_perd_yz = 6, &
+                                               use_perd_xyz = 7
+
+   CHARACTER(LEN=3), DIMENSION(7), &
+      PARAMETER, PUBLIC                     :: periodicity_string = ["  X", "  Y", "  Z", &
+                                                                     " XY", " XZ", " YZ", &
+                                                                     "XYZ"]
 
 ! **************************************************************************************************
 !> \brief   Type defining parameters related to the simulation cell
@@ -57,10 +62,14 @@ MODULE cell_types
       INTEGER                           :: ref_count = -1, &
                                            symmetry_id = use_perd_none
       LOGICAL                           :: orthorhombic = .FALSE. ! actually means a diagonal hmat
+      LOGICAL                           :: input_cell_canonicalized = .FALSE.
       REAL(KIND=dp)                     :: deth = 0.0_dp
       INTEGER, DIMENSION(3)             :: perd = -1
       REAL(KIND=dp), DIMENSION(3, 3)    :: hmat = 0.0_dp, &
-                                           h_inv = 0.0_dp
+                                           h_inv = 0.0_dp, &
+                                           input_hmat = 0.0_dp, &
+                                           input_to_canonical = 0.0_dp, &
+                                           input_recip_to_canonical = 0.0_dp
    END TYPE cell_type
 
    TYPE cell_p_type
@@ -74,6 +83,8 @@ MODULE cell_types
    ! Public subroutines
    PUBLIC :: cell_clone, &
              cell_copy, &
+             cell_transform_input_cartesian, &
+             cell_transform_input_reciprocal, &
              cell_release, &
              cell_retain, &
              get_cell, &
@@ -131,6 +142,10 @@ CONTAINS
       cell_out%perd = cell_in%perd
       cell_out%hmat = cell_in%hmat
       cell_out%h_inv = cell_in%h_inv
+      cell_out%input_cell_canonicalized = cell_in%input_cell_canonicalized
+      cell_out%input_hmat = cell_in%input_hmat
+      cell_out%input_to_canonical = cell_in%input_to_canonical
+      cell_out%input_recip_to_canonical = cell_in%input_recip_to_canonical
       cell_out%orthorhombic = cell_in%orthorhombic
       cell_out%symmetry_id = cell_in%symmetry_id
       IF (PRESENT(tag)) THEN
@@ -235,6 +250,40 @@ CONTAINS
       IF (PRESENT(tag)) tag = cell%tag
 
    END SUBROUTINE get_cell
+
+! **************************************************************************************************
+!> \brief Transform a Cartesian real-space vector from the user input cell frame
+!>        into CP2K's canonical internal cell frame.
+!> \param cell ...
+!> \param vector ...
+! **************************************************************************************************
+   SUBROUTINE cell_transform_input_cartesian(cell, vector)
+
+      TYPE(cell_type), POINTER                           :: cell
+      REAL(KIND=dp), DIMENSION(3), INTENT(INOUT)         :: vector
+
+      CPASSERT(ASSOCIATED(cell))
+
+      IF (cell%input_cell_canonicalized) vector = MATMUL(cell%input_to_canonical, vector)
+
+   END SUBROUTINE cell_transform_input_cartesian
+
+! **************************************************************************************************
+!> \brief Transform a Cartesian reciprocal-space vector from the user input cell
+!>        frame into CP2K's canonical internal cell frame.
+!> \param cell ...
+!> \param vector ...
+! **************************************************************************************************
+   SUBROUTINE cell_transform_input_reciprocal(cell, vector)
+
+      TYPE(cell_type), POINTER                           :: cell
+      REAL(KIND=dp), DIMENSION(3), INTENT(INOUT)         :: vector
+
+      CPASSERT(ASSOCIATED(cell))
+
+      IF (cell%input_cell_canonicalized) vector = MATMUL(cell%input_recip_to_canonical, vector)
+
+   END SUBROUTINE cell_transform_input_reciprocal
 
 ! **************************************************************************************************
 !> \brief   Calculate the distance between two lattice planes as defined by
@@ -415,7 +464,7 @@ CONTAINS
       DO icell = -periodic(1), periodic(1)
          DO jcell = -periodic(2), periodic(2)
             DO kcell = -periodic(3), periodic(3)
-               r = REAL((/icell, jcell, kcell/), dp)
+               r = REAL([icell, jcell, kcell], dp)
                CALL scaled_to_real(s2r, r, cell)
                rb_image(:) = rb_pbc(:) + s2r
                rab(:) = rb_image(:) - ra_pbc(:)

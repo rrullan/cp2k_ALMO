@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,15 +12,15 @@
 MODULE pao_main
    USE bibliography,                    ONLY: Schuett2018,&
                                               cite_reference
-   USE cp_external_control,             ONLY: external_control
-   USE dbcsr_api,                       ONLY: dbcsr_add,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_add,&
                                               dbcsr_copy,&
                                               dbcsr_create,&
                                               dbcsr_p_type,&
                                               dbcsr_release,&
-                                              dbcsr_reserve_diag_blocks,&
                                               dbcsr_set,&
                                               dbcsr_type
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_reserve_diag_blocks
+   USE cp_external_control,             ONLY: external_control
    USE dm_ls_scf_types,                 ONLY: ls_mstruct_type,&
                                               ls_scf_env_type
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
@@ -33,7 +33,9 @@ MODULE pao_main
    USE machine,                         ONLY: m_walltime
    USE pao_input,                       ONLY: parse_pao_section
    USE pao_io,                          ONLY: pao_read_restart,&
+                                              pao_write_hcore_matrix_csr,&
                                               pao_write_ks_matrix_csr,&
+                                              pao_write_p_matrix_csr,&
                                               pao_write_restart,&
                                               pao_write_s_matrix_csr
    USE pao_methods,                     ONLY: &
@@ -43,6 +45,7 @@ MODULE pao_main
         pao_print_atom_info, pao_store_P, pao_test_convergence
    USE pao_ml,                          ONLY: pao_ml_init,&
                                               pao_ml_predict
+   USE pao_model,                       ONLY: pao_model_predict
    USE pao_optimizer,                   ONLY: pao_opt_finalize,&
                                               pao_opt_init,&
                                               pao_opt_new_dir
@@ -53,6 +56,7 @@ MODULE pao_main
    USE pao_types,                       ONLY: pao_env_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
+   USE virial_types,                    ONLY: virial_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -146,12 +150,16 @@ CONTAINS
             CALL pao_read_restart(pao, qs_env)
          ELSE IF (SIZE(pao%ml_training_set) > 0) THEN
             CALL pao_ml_predict(pao, qs_env)
+         ELSE IF (ALLOCATED(pao%models)) THEN
+            CALL pao_model_predict(pao, qs_env)
          ELSE
             CALL pao_param_initial_guess(pao, qs_env)
          END IF
          pao%matrix_X_ready = .TRUE.
       ELSE IF (SIZE(pao%ml_training_set) > 0) THEN
          CALL pao_ml_predict(pao, qs_env)
+      ELSE IF (ALLOCATED(pao%models)) THEN
+         CALL pao_model_predict(pao, qs_env)
       ELSE
          IF (pao%iw > 0) WRITE (pao%iw, *) "PAO| reusing matrix_X from previous optimization"
       END IF
@@ -278,7 +286,11 @@ CONTAINS
          ! check for early abort without convergence?
          CALL external_control(should_stop, "PAO", start_time=qs_env%start_time, target_time=qs_env%target_time)
          IF (should_stop .OR. pao%istep >= pao%max_pao) THEN
-            CPWARN("PAO not converged!")
+            IF (pao%ignore_convergence_failure) THEN
+               CPWARN("PAO not converged!")
+            ELSE
+               CPABORT("PAO not converged!")
+            END IF
             pao_is_done = .TRUE.
             EXIT
          END IF
@@ -286,7 +298,7 @@ CONTAINS
          ! perform line-search step
          CALL linesearch_step(pao%linesearch, energy=energy, slope=pao%norm_G**2)
 
-         IF (pao%linesearch%step_size < 1e-10_dp) CPABORT("PAO gradient is wrong.")
+         IF (pao%linesearch%step_size < 1e-9_dp) CPABORT("PAO gradient is wrong.")
 
          CALL dbcsr_copy(pao%matrix_X, pao%matrix_X_orig) !restore X
          CALL dbcsr_add(pao%matrix_X, pao%matrix_D, 1.0_dp, pao%linesearch%step_size)
@@ -320,6 +332,8 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'pao_post_scf'
 
       INTEGER                                            :: handle
+      LOGICAL                                            :: use_virial
+      TYPE(virial_type), POINTER                         :: virial
 
       IF (.NOT. ls_scf_env%do_pao) RETURN
       IF (.NOT. pao_is_done) RETURN
@@ -330,12 +344,20 @@ CONTAINS
       ! terms of the primary basis
       CALL pao_write_ks_matrix_csr(qs_env, ls_scf_env)
       CALL pao_write_s_matrix_csr(qs_env, ls_scf_env)
+      CALL pao_write_hcore_matrix_csr(qs_env, ls_scf_env)
+      CALL pao_write_p_matrix_csr(qs_env, ls_scf_env)
 
       CALL pao_store_P(qs_env, ls_scf_env)
       IF (ls_scf_env%calculate_forces) CALL pao_add_forces(qs_env, ls_scf_env)
 
+      CALL get_qs_env(qs_env=qs_env, virial=virial)
+      use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
+      IF (use_virial .AND. ls_scf_env%calculate_forces) THEN
+         CPABORT("Analytical stress tensor not implemented for PAO.")
+      END IF
+
       CALL timestop(handle)
-   END SUBROUTINE
+   END SUBROUTINE pao_post_scf
 
 ! **************************************************************************************************
 !> \brief Finish a PAO optimization run.

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -126,17 +126,11 @@ CONTAINS
 
       IF (loc_explicit) THEN
          CALL section_vals_val_get(localize_section, "LIST", explicit=explicit)
-         IF (explicit) THEN
-            CPWARN("Localization using LIST of states not implemented for TB methods")
-         END IF
+         CPWARN_IF(explicit, "Localization using LIST of states not implemented for TB methods")
          CALL section_vals_val_get(localize_section, "ENERGY_RANGE", explicit=explicit)
-         IF (explicit) THEN
-            CPWARN("Localization using energy range not implemented for TB methods")
-         END IF
+         CPWARN_IF(explicit, "Localization using energy range not implemented for TB methods")
          CALL section_vals_val_get(localize_section, "LIST_UNOCCUPIED", explicit=explicit)
-         IF (explicit) THEN
-            CPWARN("Localization of unoccupied states not implemented for TB methods")
-         END IF
+         CPWARN_IF(explicit, "Localization of unoccupied states not implemented for TB methods")
          ! localize all occupied states
          IF (iounit > 0) THEN
             WRITE (iounit, "(/,T11,A)") " +++++++++++++ Start Localization of Orbitals +++++++++++++"
@@ -152,7 +146,7 @@ CONTAINS
          CALL qs_subsys_get(subsys, particles=particles)
 
          IF (do_kpoints) THEN
-            CPWARN("Localization not implemented for k-point calculations!!")
+            CPWARN("Localization not implemented for k-point calculations!")
          ELSEIF (dft_control%restricted) THEN
             IF (iounit > 0) WRITE (iounit, *) &
                " Unclear how we define MOs / localization in the restricted case ... skipping"

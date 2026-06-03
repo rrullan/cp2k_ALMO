@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -23,8 +23,7 @@ MODULE tip_scan_methods
                                               pw_env_type
    USE pw_grid_types,                   ONLY: pw_grid_type
    USE pw_grids,                        ONLY: pw_grid_create,&
-                                              pw_grid_release,&
-                                              pw_grid_setup
+                                              pw_grid_release
    USE pw_methods,                      ONLY: pw_axpy,&
                                               pw_multiply_with,&
                                               pw_structure_factor,&
@@ -98,7 +97,7 @@ CONTAINS
       IF (do_tip_scan) THEN
          iounit = cp_logger_get_default_io_unit(logger)
          cname = logger%iter_info%project_name
-         logger%iter_info%project_name = logger%iter_info%project_name//"+TIP_SCAN"
+         logger%iter_info%project_name = TRIM(logger%iter_info%project_name)//"+TIP_SCAN"
          plevel = logger%iter_info%print_level
          logger%iter_info%print_level = silent_print_level
 
@@ -288,8 +287,7 @@ CONTAINS
       CALL para_env%bcast(dcell)
 
       NULLIFY (pw_grid)
-      CALL pw_grid_create(pw_grid, para_env)
-      CALL pw_grid_setup(dcell, pw_grid, npts=npts)
+      CALL pw_grid_create(pw_grid, para_env, dcell, npts=npts)
       CALL scan_env%tip_pw_r%create(pw_grid)
 !deb
       scaling = 0.1_dp

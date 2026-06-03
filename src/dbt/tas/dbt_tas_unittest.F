@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -10,7 +10,7 @@
 !> \author Patrick Seewald
 ! **************************************************************************************************
 PROGRAM dbt_tas_unittest
-   USE dbcsr_api,                       ONLY: dbcsr_finalize_lib,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_finalize_lib,&
                                               dbcsr_init_lib
    USE dbm_api,                         ONLY: dbm_get_name,&
                                               dbm_library_finalize,&
@@ -61,7 +61,7 @@ PROGRAM dbt_tas_unittest
    END IF
 
    io_unit = -1
-   IF (mynode .EQ. 0) io_unit = default_output_unit
+   IF (mynode == 0) io_unit = default_output_unit
 
    CALL dbcsr_init_lib(mp_comm%get_handle(), io_unit) ! Needed for DBM_VALIDATE_AGAINST_DBCSR.
    CALL dbm_library_init()
@@ -166,4 +166,4 @@ PROGRAM dbt_tas_unittest
    CALL dbcsr_finalize_lib() ! Needed for DBM_VALIDATE_AGAINST_DBCSR.
    CALL mp_world_finalize()
 
-END PROGRAM
+END PROGRAM dbt_tas_unittest

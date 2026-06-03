@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -168,9 +168,9 @@ CONTAINS
       !ENDIF
       !
       ! check that the psi0 are localized and you have all the centers
-      IF (.NOT. linres_control%localized_psi0) &
-         CPWARN(' To get NMR parameters within PBC you need localized zero order orbitals ')
-
+      IF (.NOT. linres_control%localized_psi0) THEN
+         CPWARN("To get NMR parameters within PBC you need localized zero order orbitals")
+      END IF
       gapw = dft_control%qs_control%gapw
       nspins = dft_control%nspins
       natom = SIZE(particle_set, 1)
@@ -255,12 +255,12 @@ CONTAINS
          ! check the list
          CPASSERT(ASSOCIATED(nmr_env%cs_atom_list))
          DO ir = 1, SIZE(nmr_env%cs_atom_list, 1)
-            IF (nmr_env%cs_atom_list(ir) .LT. 1 .OR. nmr_env%cs_atom_list(ir) .GT. natom) THEN
+            IF (nmr_env%cs_atom_list(ir) < 1 .OR. nmr_env%cs_atom_list(ir) > natom) THEN
                CPABORT("Unknown atom(s)")
             END IF
             DO j = 1, SIZE(nmr_env%cs_atom_list, 1)
-               IF (j .EQ. ir) CYCLE
-               IF (nmr_env%cs_atom_list(ir) .EQ. nmr_env%cs_atom_list(j)) THEN
+               IF (j == ir) CYCLE
+               IF (nmr_env%cs_atom_list(ir) == nmr_env%cs_atom_list(j)) THEN
                   CPABORT("Duplicate atoms")
                END IF
             END DO

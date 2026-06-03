@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -11,7 +11,7 @@
 !>      06.2019 Moved from rpa_ri_gpw [Frederick Stein]
 ! **************************************************************************************************
 MODULE rpa_gw_ic
-   USE dbcsr_api,                       ONLY: dbcsr_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_type
    USE dbt_api,                         ONLY: &
         dbt_contract, dbt_copy, dbt_copy_matrix_to_tensor, dbt_create, dbt_destroy, dbt_get_block, &
         dbt_get_info, dbt_iterator_blocks_left, dbt_iterator_next_block, dbt_iterator_start, &
@@ -269,9 +269,9 @@ CONTAINS
 
          Delta_Sigma_Neaton_prv(n_start:n_end) = &
             Delta_Sigma_Neaton_prv(n_start:n_end) + &
-            (/(DOT_PRODUCT(block_1(:, n, n), &
-                           block_2(:, n, n)), &
-               n=n_start_block, n_end_block)/)
+            [(DOT_PRODUCT(block_1(:, n, n), &
+                          block_2(:, n, n)), &
+              n=n_start_block, n_end_block)]
          DEALLOCATE (block_1, block_2)
       END DO
       CALL dbt_iterator_stop(iter)
@@ -282,7 +282,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE
+   END SUBROUTINE trace_ic_gw
 
 ! **************************************************************************************************
 !> \brief ...

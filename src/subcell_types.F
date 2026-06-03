@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -26,10 +26,10 @@ MODULE subcell_types
 
 ! **************************************************************************************************
    TYPE subcell_type
-      INTEGER                        :: natom
-      REAL(KIND=dp), DIMENSION(3)    :: s_max, s_min
-      INTEGER, DIMENSION(:), POINTER :: atom_list
-      REAL(KIND=dp), DIMENSION(3, 8)  :: corners
+      INTEGER                        :: natom = -1
+      REAL(KIND=dp), DIMENSION(3)    :: s_max = -1.0_dp, s_min = -1.0_dp
+      INTEGER, DIMENSION(:), POINTER :: atom_list => NULL()
+      REAL(KIND=dp), DIMENSION(3, 8)  :: corners = -1.0_dp
    END TYPE subcell_type
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'subcell_types'
@@ -90,14 +90,14 @@ CONTAINS
                subcell(i, j, k)%s_max(3) = c_max
                subcell(i, j, k)%natom = 0
                IF (PRESENT(cell)) THEN
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 1), (/a_min, b_min, c_min/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 2), (/a_max, b_min, c_min/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 3), (/a_min, b_max, c_min/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 4), (/a_max, b_max, c_min/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 5), (/a_min, b_min, c_max/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 6), (/a_max, b_min, c_max/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 7), (/a_min, b_max, c_max/), cell)
-                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 8), (/a_max, b_max, c_max/), cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 1), [a_min, b_min, c_min], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 2), [a_max, b_min, c_min], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 3), [a_min, b_max, c_min], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 4), [a_max, b_max, c_min], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 5), [a_min, b_min, c_max], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 6), [a_max, b_min, c_max], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 7), [a_min, b_max, c_max], cell)
+                  CALL scaled_to_real(subcell(i, j, k)%corners(:, 8), [a_max, b_max, c_max], cell)
                END IF
                IF (PRESENT(maxatom)) THEN
                   ALLOCATE (subcell(i, j, k)%atom_list(maxatom))

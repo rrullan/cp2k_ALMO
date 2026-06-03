@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,18 +18,18 @@ MODULE rtp_admm_methods
                                               get_admm_env
    USE cp_control_types,                ONLY: admm_control_type,&
                                               dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
+        dbcsr_get_info, dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               cp_dbcsr_plus_fm_fm_t
-   USE cp_fm_basic_linalg,              ONLY: cp_fm_upper_to_full
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_uplo_to_full
    USE cp_fm_cholesky,                  ONLY: cp_fm_cholesky_decompose,&
                                               cp_fm_cholesky_invert
    USE cp_fm_types,                     ONLY: cp_fm_get_info,&
                                               cp_fm_to_fm,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
-        dbcsr_get_info, dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
    USE hfx_admm_utils,                  ONLY: create_admm_xc_section
    USE input_constants,                 ONLY: do_admm_basis_projection,&
                                               do_admm_purify_none
@@ -339,7 +339,7 @@ CONTAINS
 
       IF (geometry_did_change) THEN
          CALL copy_dbcsr_to_fm(matrix_s_aux_fit(1)%matrix, admm_env%S_inv)
-         CALL cp_fm_upper_to_full(admm_env%S_inv, admm_env%work_aux_aux)
+         CALL cp_fm_uplo_to_full(admm_env%S_inv, admm_env%work_aux_aux)
          CALL cp_fm_to_fm(admm_env%S_inv, admm_env%S)
 
          CALL copy_dbcsr_to_fm(matrix_s_mixed(1)%matrix, admm_env%Q)
@@ -348,7 +348,7 @@ CONTAINS
          CALL cp_fm_cholesky_decompose(admm_env%S_inv)
          CALL cp_fm_cholesky_invert(admm_env%S_inv)
          !! Symmetrize the guy
-         CALL cp_fm_upper_to_full(admm_env%S_inv, admm_env%work_aux_aux)
+         CALL cp_fm_uplo_to_full(admm_env%S_inv, admm_env%work_aux_aux)
          !! Calculate A=S'^(-1)*P
          CALL parallel_gemm('N', 'N', nao_aux_fit, nao_orb, nao_aux_fit, &
                             1.0_dp, admm_env%S_inv, admm_env%Q, 0.0_dp, &

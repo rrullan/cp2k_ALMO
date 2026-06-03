@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,6 +19,7 @@ MODULE qs_linres_polar_utils
                                               cite_reference
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_fm_basic_linalg,              ONLY: cp_fm_trace
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
                                               cp_fm_struct_release,&
@@ -39,7 +40,6 @@ MODULE qs_linres_polar_utils
    USE cp_result_methods,               ONLY: cp_results_erase,&
                                               put_results
    USE cp_result_types,                 ONLY: cp_result_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE force_env_types,                 ONLY: force_env_get,&
                                               force_env_type
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
@@ -447,16 +447,15 @@ CONTAINS
          CALL get_polar_env(polar_env=polar_env, &
                             psi1_dBerry=psi1_dBerry, &
                             dBerry_psi0=dBerry_psi0)
+         DO idir = 1, 3
+            DO ispin = 1, nspins
+               CALL cp_fm_set_all(psi1_dBerry(idir, ispin), 0.0_dp)
+            END DO
+         END DO
          ! Restart
          IF (linres_control%linres_restart) THEN
             DO idir = 1, 3
                CALL linres_read_restart(qs_env, lr_section, psi1_dBerry(idir, :), idir, "psi1_dBerry")
-            END DO
-         ELSE
-            DO idir = 1, 3
-               DO ispin = 1, nspins
-                  CALL cp_fm_set_all(psi1_dBerry(idir, ispin), 0.0_dp)
-               END DO
             END DO
          END IF
          loop_idir: DO idir = 1, 3

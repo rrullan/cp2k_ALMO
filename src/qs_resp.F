@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -96,30 +96,30 @@ MODULE qs_resp
    PUBLIC :: resp_fit
 
    TYPE resp_type
-      LOGICAL                                :: equal_charges, itc, &
-                                                molecular_sys, rheavies, &
-                                                use_repeat_method
-      INTEGER                                :: nres, ncons, &
-                                                nrest_sec, ncons_sec, &
-                                                npoints, stride(3), my_fit, &
-                                                npoints_proc, &
-                                                auto_vdw_radii_table
-      INTEGER, DIMENSION(:), POINTER         :: atom_surf_list
-      INTEGER, DIMENSION(:, :), POINTER       :: fitpoints
-      REAL(KIND=dp)                          :: rheavies_strength, &
-                                                length, eta, &
-                                                sum_vhartree, offset
-      REAL(KIND=dp), DIMENSION(3)            :: box_hi, box_low
-      REAL(KIND=dp), DIMENSION(:), POINTER   :: rmin_kind, &
-                                                rmax_kind
-      REAL(KIND=dp), DIMENSION(:), POINTER   :: range_surf
-      REAL(KIND=dp), DIMENSION(:), POINTER   :: rhs
-      REAL(KIND=dp), DIMENSION(:), POINTER   :: sum_vpot
-      REAL(KIND=dp), DIMENSION(:, :), POINTER :: matrix
+      LOGICAL                                :: equal_charges = .FALSE., itc = .FALSE., &
+                                                molecular_sys = .FALSE., rheavies = .FALSE., &
+                                                use_repeat_method = .FALSE.
+      INTEGER                                :: nres = -1, ncons = -1, &
+                                                nrest_sec = -1, ncons_sec = -1, &
+                                                npoints = -1, stride(3) = -1, my_fit = -1, &
+                                                npoints_proc = -1, &
+                                                auto_vdw_radii_table = -1
+      INTEGER, DIMENSION(:), POINTER         :: atom_surf_list => NULL()
+      INTEGER, DIMENSION(:, :), POINTER       :: fitpoints => NULL()
+      REAL(KIND=dp)                          :: rheavies_strength = -1.0_dp, &
+                                                length = -1.0_dp, eta = -1.0_dp, &
+                                                sum_vhartree = -1.0_dp, offset = -1.0_dp
+      REAL(KIND=dp), DIMENSION(3)            :: box_hi = -1.0_dp, box_low = -1.0_dp
+      REAL(KIND=dp), DIMENSION(:), POINTER   :: rmin_kind => NULL(), &
+                                                rmax_kind => NULL()
+      REAL(KIND=dp), DIMENSION(:), POINTER   :: range_surf => NULL()
+      REAL(KIND=dp), DIMENSION(:), POINTER   :: rhs => NULL()
+      REAL(KIND=dp), DIMENSION(:), POINTER   :: sum_vpot => NULL()
+      REAL(KIND=dp), DIMENSION(:, :), POINTER :: matrix => NULL()
    END TYPE resp_type
 
    TYPE resp_p_type
-      TYPE(resp_type), POINTER              ::  p_resp
+      TYPE(resp_type), POINTER              ::  p_resp => NULL()
    END TYPE resp_p_type
 
 CONTAINS
@@ -642,7 +642,7 @@ CONTAINS
          END IF
 
          CALL get_cell(cell=cell, h=hmat)
-         resp_env%box_hi = (/hmat(1, 1), hmat(2, 2), hmat(3, 3)/)
+         resp_env%box_hi = [hmat(1, 1), hmat(2, 2), hmat(3, 3)]
          resp_env%box_low = 0.0_dp
          CALL section_vals_val_get(sphere_section, "X_HI", explicit=explicit)
          IF (explicit) CALL section_vals_val_get(sphere_section, "X_HI", &
@@ -1415,7 +1415,7 @@ CONTAINS
       IF (resp_env%rheavies) THEN
          DO i = 1, natom
             CALL get_atomic_kind(atomic_kind=particle_set(i)%atomic_kind, z=z)
-            IF (z .NE. 1) THEN
+            IF (z /= 1) THEN
                resp_env%matrix(i, i) = resp_env%matrix(i, i) + 2.0_dp*resp_env%rheavies_strength
             END IF
          END DO

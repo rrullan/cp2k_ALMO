@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -70,11 +70,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'calculate_gcp_pairpot'
 
       INTEGER                                            :: atom_a, atom_b, handle, i, iatom, ikind, &
-                                                            jatom, jkind, mepos, natom, nkind, &
-                                                            nsto, unit_nr
+                                                            jatom, jkind, natom, nkind, nsto, &
+                                                            unit_nr
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of, ngcpat
-      LOGICAL                                            :: atenergy, atex, atstress, use_virial, &
-                                                            verbose
+      LOGICAL                                            :: atenergy, atex, use_virial, verbose
       REAL(KIND=dp)                                      :: eama, eamb, egcp, expab, fac, fda, fdb, &
                                                             gnorm, nvirta, nvirtb, rcc, sint, sqa, &
                                                             sqb
@@ -85,7 +84,6 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(6, 6)                     :: sab
       REAL(KIND=dp), DIMENSION(6, 6, 3)                  :: dab
       REAL(KIND=dp), DIMENSION(:), POINTER               :: atener
-      REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: atstr
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(atprop_type), POINTER                         :: atprop
       TYPE(cell_type), POINTER                           :: cell
@@ -125,8 +123,6 @@ CONTAINS
          CALL atprop_array_init(atprop%ategcp, natom)
          atener => atprop%ategcp
       END IF
-      atstress = atprop%stress
-      atstr => atprop%atstress
       ! external atomic energy
       atex = .FALSE.
       IF (PRESENT(ategcp)) atex = .TRUE.
@@ -151,7 +147,6 @@ CONTAINS
       IF (calculate_forces) THEN
          NULLIFY (force)
          CALL get_qs_env(qs_env=qs_env, force=force)
-         ALLOCATE (atom_of_kind(natom), kind_of(natom))
          CALL get_atomic_kind_set(atomic_kind_set, atom_of_kind=atom_of_kind, kind_of=kind_of)
          use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
          IF (use_virial) dvirial = virial%pv_virial
@@ -176,7 +171,7 @@ CONTAINS
       CALL neighbor_list_iterator_create(nl_iterator, sab_gcp)
       DO WHILE (neighbor_list_iterate(nl_iterator) == 0)
 
-         CALL get_iterator_info(nl_iterator, mepos=mepos, ikind=ikind, jkind=jkind, iatom=iatom, jatom=jatom, r=rij)
+         CALL get_iterator_info(nl_iterator, ikind=ikind, jkind=jkind, iatom=iatom, jatom=jatom, r=rij)
 
          rcc = SQRT(rij(1)*rij(1) + rij(2)*rij(2) + rij(3)*rij(3))
          IF (rcc > 1.e-6_dp) THEN
@@ -234,10 +229,6 @@ CONTAINS
                force(jkind)%gcp(:, atom_b) = force(jkind)%gcp(:, atom_b) + fdij(:)
                IF (use_virial) THEN
                   CALL virial_pair_force(virial%pv_virial, -1._dp, fdij, rij)
-               END IF
-               IF (atstress) THEN
-                  CALL virial_pair_force(atstr(:, :, iatom), -0.5_dp, fdij, rij)
-                  CALL virial_pair_force(atstr(:, :, jatom), -0.5_dp, fdij, rij)
                END IF
             END IF
             IF (atenergy) THEN

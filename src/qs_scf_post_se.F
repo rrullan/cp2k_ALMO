@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -22,6 +22,8 @@ MODULE qs_scf_post_se
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_get_block_p,&
+                                              dbcsr_p_type
    USE cp_dbcsr_output,                 ONLY: cp_dbcsr_write_sparse_matrix
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
@@ -33,8 +35,7 @@ MODULE qs_scf_post_se
    USE cp_result_methods,               ONLY: cp_results_erase,&
                                               put_results
    USE cp_result_types,                 ONLY: cp_result_type
-   USE dbcsr_api,                       ONLY: dbcsr_get_block_p,&
-                                              dbcsr_p_type
+   USE eeq_method,                      ONLY: eeq_print
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -42,7 +43,9 @@ MODULE qs_scf_post_se
                                               section_vals_val_get
    USE kinds,                           ONLY: default_string_length,&
                                               dp
-   USE mathconstants,                   ONLY: twopi
+   USE mathconstants,                   ONLY: twopi,&
+                                              z_one,&
+                                              z_zero
    USE message_passing,                 ONLY: mp_para_env_type
    USE moments_utils,                   ONLY: get_reference_point
    USE orbital_pointers,                ONLY: coset,&
@@ -169,14 +172,14 @@ CONTAINS
       print_key => section_vals_get_subs_vals(section_vals=input, &
                                               subsection_name="DFT%PRINT%XRAY_DIFFRACTION_SPECTRUM")
       IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
-         CPWARN("XRAY_DIFFRACTION_SPECTRUM  not implemented for Semi-Empirical calculations!!")
+         CPWARN("XRAY_DIFFRACTION_SPECTRUM not implemented for Semi-Empirical calculations!")
       END IF
 
       ! Calculation of Electric Field Gradients
       print_key => section_vals_get_subs_vals(section_vals=input, &
                                               subsection_name="DFT%PRINT%ELECTRIC_FIELD_GRADIENT")
       IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
-         CPWARN("ELECTRIC_FIELD_GRADIENT not implemented for Semi-Empirical calculations!!")
+         CPWARN("ELECTRIC_FIELD_GRADIENT not implemented for Semi-Empirical calculations!")
       END IF
 
       ! Calculation of EPR Hyperfine Coupling Tensors
@@ -184,7 +187,7 @@ CONTAINS
                                               subsection_name="DFT%PRINT%HYPERFINE_COUPLING_TENSOR")
       IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), &
                 cp_p_file)) THEN
-         CPWARN("HYPERFINE_COUPLING_TENSOR  not implemented for Semi-Empirical calculations!!")
+         CPWARN("HYPERFINE_COUPLING_TENSOR not implemented for Semi-Empirical calculations!")
       END IF
 
       CALL timestop(handle)
@@ -298,8 +301,8 @@ CONTAINS
             dria = twopi*MATMUL(cell%h_inv, drcc)
             dzphase = charge_tot*CMPLX(-SIN(ria), COS(ria), dp)**(charge_tot - 1.0_dp)*dria
 
-            ggamma = CMPLX(1.0_dp, 0.0_dp, KIND=dp)
-            dggamma = CMPLX(0.0_dp, 0.0_dp, KIND=dp)
+            ggamma = z_one
+            dggamma = z_zero
             DO ikind = 1, SIZE(atomic_kind_set)
                CALL get_atomic_kind(atomic_kind_set(ikind), natom=nat)
                DO i = 1, nat
@@ -560,6 +563,15 @@ CONTAINS
          DEALLOCATE (charges, mcharge)
       END IF
 
+      ! EEQ Charges
+      print_key => section_vals_get_subs_vals(input, "DFT%PRINT%EEQ_CHARGES")
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
+         unit_nr = cp_print_key_unit_nr(logger, input, "DFT%PRINT%EEQ_CHARGES", &
+                                        extension=".eeq", log_filename=.FALSE.)
+         CALL eeq_print(qs_env, unit_nr, print_level=1, ext=.FALSE.)
+         CALL cp_print_key_finished_output(unit_nr, logger, print_key)
+      END IF
+
       ! Compute the Lowdin charges
       print_key => section_vals_get_subs_vals(input, "DFT%PRINT%LOWDIN")
       IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
@@ -596,7 +608,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'write_available_results'
 
       INTEGER                                            :: after, handle, ispin, iw, output_unit
-      LOGICAL                                            :: omit_headers
+      LOGICAL                                            :: omit_headers, requested_pdos
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: ks_rmpv, rho_ao
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -606,11 +618,12 @@ CONTAINS
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
       TYPE(qs_subsys_type), POINTER                      :: subsys
-      TYPE(section_vals_type), POINTER                   :: dft_section, input
+      TYPE(section_vals_type), POINTER                   :: dft_section, input, pdos_section, &
+                                                            print_key
 
       CALL timeset(routineN, handle)
       NULLIFY (dft_control, particle_set, rho, ks_rmpv, dft_section, input, &
-               particles, subsys, para_env, rho_ao)
+               particles, subsys, para_env, rho_ao, pdos_section, print_key)
       logger => cp_get_default_logger()
       output_unit = cp_logger_get_default_io_unit(logger)
 
@@ -630,47 +643,52 @@ CONTAINS
       ! Print MO information if requested
       CALL qs_scf_write_mos(qs_env, scf_env, final_mos=.TRUE.)
 
-      ! Aat the end of SCF printout the projected DOS for each atomic kind
+      ! At the end of SCF printout the projected DOS for each atomic kind
       dft_section => section_vals_get_subs_vals(input, "DFT")
-      IF (BTEST(cp_print_key_should_output(logger%iter_info, dft_section, "PRINT%PDOS") &
-                , cp_p_file)) THEN
-         CPWARN("PDOS not implemented for Semi-Empirical calculations!!")
+      print_key => section_vals_get_subs_vals(dft_section, "PRINT%DOS")
+      requested_pdos = .FALSE.
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, print_key), cp_p_file)) THEN
+         pdos_section => section_vals_get_subs_vals(print_key, "PDOS")
+         CALL section_vals_get(pdos_section, explicit=requested_pdos)
+      END IF
+      IF (requested_pdos) THEN
+         CPWARN("PDOS not implemented for Semi-Empirical calculations!")
       END IF
 
       ! Print the total density (electronic + core charge)
       IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
                                            "DFT%PRINT%TOT_DENSITY_CUBE"), cp_p_file)) THEN
-         CPWARN("TOT_DENSITY_CUBE  not implemented for Semi-Empirical calculations!!")
+         CPWARN("TOT_DENSITY_CUBE  not implemented for Semi-Empirical calculations!")
       END IF
 
       ! Write cube file with electron density
       IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
                                            "DFT%PRINT%E_DENSITY_CUBE"), cp_p_file)) THEN
-         CPWARN("E_DENSITY_CUBE not implemented for Semi-Empirical calculations!!")
+         CPWARN("E_DENSITY_CUBE not implemented for Semi-Empirical calculations!")
       END IF ! print key
 
       ! Write cube file with EFIELD
       IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
                                            "DFT%PRINT%EFIELD_CUBE"), cp_p_file)) THEN
-         CPWARN("EFIELD_CUBE not implemented for Semi-Empirical calculations!!")
+         CPWARN("EFIELD_CUBE not implemented for Semi-Empirical calculations!")
       END IF ! print key
 
       ! Write cube file with ELF
       IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
                                            "DFT%PRINT%ELF_CUBE"), cp_p_file)) THEN
-         CPWARN("ELF function not implemented for Semi-Empirical calculations!!")
+         CPWARN("ELF function not implemented for Semi-Empirical calculations!")
       END IF ! print key
 
       ! Print the hartree potential
       IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
                                            "DFT%PRINT%V_HARTREE_CUBE"), cp_p_file)) THEN
-         CPWARN("V_HARTREE_CUBE not implemented for Semi-Empirical calculations!!")
+         CPWARN("V_HARTREE_CUBE not implemented for Semi-Empirical calculations!")
       END IF
 
       ! Print the XC potential
       IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
                                            "DFT%PRINT%V_XC_CUBE"), cp_p_file)) THEN
-         CPWARN("V_XC_CUBE not available for Semi-Empirical calculations!!")
+         CPWARN("V_XC_CUBE not available for Semi-Empirical calculations!")
       END IF
 
       ! Write the density matrix

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -104,7 +104,8 @@ MODULE input_section_types
       INTEGER :: ref_count = 0, n_keywords = 0, n_subsections = 0
       CHARACTER(len=default_string_length)        :: name = ""
       CHARACTER(len=default_string_length)        :: location = ""
-      CHARACTER, DIMENSION(:), POINTER              :: description => Null()
+      CHARACTER, DIMENSION(:), POINTER            :: description => Null()
+      CHARACTER(LEN=:), ALLOCATABLE               :: deprecation_notice
       INTEGER, POINTER, DIMENSION(:)              :: citations => NULL()
       TYPE(keyword_p_type), DIMENSION(:), POINTER :: keywords => NULL()
       TYPE(section_p_type), POINTER, DIMENSION(:) :: subsections => NULL()
@@ -125,7 +126,7 @@ MODULE input_section_types
 ! **************************************************************************************************
    TYPE section_vals_type
       INTEGER :: ref_count = 0
-      INTEGER, POINTER, DIMENSION(:)                     :: ibackup => NULL()
+      INTEGER, POINTER, DIMENSION(:)                      :: ibackup => NULL()
       TYPE(section_type), POINTER                         :: section => NULL()
       TYPE(cp_sll_val_p_type), DIMENSION(:, :), POINTER   :: values => NULL()
       TYPE(section_vals_p_type), DIMENSION(:, :), POINTER :: subs_vals => NULL()
@@ -149,16 +150,18 @@ CONTAINS
 !>        structure, defaults to 0
 !> \param repeats if this section can repeat (defaults to false)
 !> \param citations ...
+!> \param deprecation_notice show this warning that the section is deprecated
 !> \author fawzi
 ! **************************************************************************************************
    SUBROUTINE section_create(section, location, name, description, n_keywords, &
-                             n_subsections, repeats, citations)
+                             n_subsections, repeats, citations, deprecation_notice)
 
       TYPE(section_type), POINTER                        :: section
       CHARACTER(len=*), INTENT(in)                       :: location, name, description
       INTEGER, INTENT(in), OPTIONAL                      :: n_keywords, n_subsections
       LOGICAL, INTENT(in), OPTIONAL                      :: repeats
       INTEGER, DIMENSION(:), INTENT(IN), OPTIONAL        :: citations
+      CHARACTER(len=*), INTENT(IN), OPTIONAL             :: deprecation_notice
 
       INTEGER                                            :: i, my_n_keywords, my_n_subsections, n
 
@@ -204,6 +207,10 @@ CONTAINS
       DO i = 1, my_n_subsections
          NULLIFY (section%subsections(i)%section)
       END DO
+
+      IF (PRESENT(deprecation_notice)) THEN
+         section%deprecation_notice = TRIM(deprecation_notice)
+      END IF
 
    END SUBROUTINE section_create
 
@@ -741,7 +748,7 @@ CONTAINS
 
       ! prepare for recursive parsing of subsections. i_rep_section will be used for last section
       my_index = INDEX(subsection_name, "%")
-      IF (my_index .EQ. 0) THEN
+      IF (my_index == 0) THEN
          is_path = .FALSE.
          my_index = LEN_TRIM(subsection_name)
       ELSE
@@ -1423,7 +1430,8 @@ CONTAINS
 
       INTEGER, PARAMETER                                 :: incr = 2
 
-      CHARACTER(len=default_string_length)               :: myfmt
+      CHARACTER(LEN=1)                                   :: first_key_char, first_sec_char
+      CHARACTER(LEN=25)                                  :: myfmt
       INTEGER                                            :: i_rep_s, ik, isec, ival, nr, nval
       INTEGER, SAVE                                      :: indent = 1
       LOGICAL                                            :: defaultSection, explicit, &
@@ -1442,25 +1450,37 @@ CONTAINS
       CPASSERT(section_vals%ref_count > 0)
       IF (unit_nr > 0) THEN
          CALL section_vals_get(section_vals, explicit=explicit, n_repetition=nr, section=section)
+         IF (ALLOCATED(section%deprecation_notice)) THEN
+            first_sec_char = "#"
+         ELSE
+            first_sec_char = " "
+         END IF
          IF (explicit .OR. (.NOT. my_hide_defaults)) THEN
             DO i_rep_s = 1, nr
                IF (.NOT. my_hide_root) THEN
-                  WRITE (UNIT=myfmt, FMT="(I0,A1)") indent, "X"
+                  WRITE (UNIT=myfmt, FMT="(A1,I0,A4)") "(", indent, "X,A)"
                   IF (ASSOCIATED(section%keywords(-1)%keyword)) THEN
-                     WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//",A)", ADVANCE="NO") &
-                        default_section_character//TRIM(ADJUSTL(section%name))
+                     WRITE (UNIT=unit_nr, FMT=myfmt, ADVANCE="NO") &
+                        TRIM(first_sec_char)//default_section_character//TRIM(ADJUSTL(section%name))
                   ELSE
-                     WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//",A)") &
-                        default_section_character//TRIM(ADJUSTL(section%name))
+                     WRITE (UNIT=unit_nr, FMT=myfmt) &
+                        TRIM(first_sec_char)//default_section_character//TRIM(ADJUSTL(section%name))
                   END IF
                END IF
                defaultSection = (SIZE(section_vals%values, 2) == 0)
                IF (.NOT. defaultSection) THEN
                   IF (.NOT. my_hide_root) indent = indent + incr
-                  WRITE (UNIT=myfmt, FMT="(I0,A1)") indent, "X"
+                  WRITE (UNIT=myfmt, FMT="(A1,I0,A4)") "(", indent, "X,A)"
                   DO ik = -1, section%n_keywords
                      keyword => section%keywords(ik)%keyword
                      IF (ASSOCIATED(keyword)) THEN
+                        IF (ALLOCATED(keyword%deprecation_notice) .OR. &
+                            ALLOCATED(section%deprecation_notice)) THEN
+                           ! Comment deprecated keyword
+                           first_key_char = "#"
+                        ELSE
+                           first_key_char = " "
+                        END IF
                         IF (keyword%type_of_var /= no_t .AND. keyword%names(1) (1:2) /= "__") THEN
                            CALL section_vals_val_get(section_vals, keyword%names(1), &
                                                      i_rep_s, n_rep_val=nval)
@@ -1484,11 +1504,11 @@ CONTAINS
                                  END IF
                                  IF (keyword%names(1) /= '_DEFAULT_KEYWORD_' .AND. &
                                      keyword%names(1) /= '_SECTION_PARAMETERS_') THEN
-                                    WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//",A)", ADVANCE="NO") &
-                                       TRIM(keyword%names(1))
+                                    WRITE (UNIT=unit_nr, FMT=myfmt, ADVANCE="NO") &
+                                       TRIM(first_key_char)//TRIM(keyword%names(1))
                                  ELSE IF (keyword%names(1) == '_DEFAULT_KEYWORD_' .AND. &
                                           keyword%type_of_var /= lchar_t) THEN
-                                    WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//")", ADVANCE="NO")
+                                    WRITE (UNIT=unit_nr, FMT=myfmt, ADVANCE="NO")
                                  END IF
                                  CALL val_write(val, unit_nr=unit_nr, unit=keyword%unit, fmt=myfmt)
                               END DO
@@ -1498,11 +1518,11 @@ CONTAINS
                               val => keyword%default_value
                               IF (keyword%names(1) /= '_DEFAULT_KEYWORD_' .AND. &
                                   keyword%names(1) /= '_SECTION_PARAMETERS_') THEN
-                                 WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//",A)", ADVANCE="NO") &
-                                    TRIM(keyword%names(1))
+                                 WRITE (UNIT=unit_nr, FMT=myfmt, ADVANCE="NO") &
+                                    TRIM(first_key_char)//TRIM(keyword%names(1))
                               ELSE IF (keyword%names(1) == '_DEFAULT_KEYWORD_' .AND. &
                                        keyword%type_of_var /= lchar_t) THEN
-                                 WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//")", ADVANCE="NO")
+                                 WRITE (UNIT=unit_nr, FMT=myfmt, ADVANCE="NO")
                               END IF
                               CALL val_write(val, unit_nr=unit_nr, unit=keyword%unit, fmt=myfmt)
                            END IF
@@ -1520,9 +1540,10 @@ CONTAINS
                END IF
                IF (.NOT. my_hide_root) THEN
                   indent = indent - incr
-                  WRITE (UNIT=myfmt, FMT="(I0,A1)") indent, "X"
-                  WRITE (UNIT=unit_nr, FMT="("//TRIM(myfmt)//",A)") &
-                     default_section_character//"END "//TRIM(ADJUSTL(section%name))
+                  WRITE (UNIT=myfmt, FMT="(A1,I0,A4)") "(", indent, "X,A)"
+                  WRITE (UNIT=unit_nr, FMT=myfmt) &
+                     TRIM(first_sec_char)//default_section_character// &
+                     "END "//TRIM(ADJUSTL(section%name))
                END IF
             END DO
          END IF
@@ -1567,6 +1588,11 @@ CONTAINS
             REPEAT(" ", l1)//"<DESCRIPTION>"// &
             TRIM(substitute_special_xml_tokens(a2s(section%description))) &
             //"</DESCRIPTION>"
+
+         IF (ALLOCATED(section%deprecation_notice)) &
+            WRITE (UNIT=unit_number, FMT="(A)") REPEAT(" ", l1)//"<DEPRECATION_NOTICE>"// &
+            TRIM(substitute_special_xml_tokens(section%deprecation_notice)) &
+            //"</DEPRECATION_NOTICE>"
 
          IF (ASSOCIATED(section%citations)) THEN
             DO i = 1, SIZE(section%citations, 1)

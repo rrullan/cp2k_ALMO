@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -18,6 +18,9 @@ MODULE cp_ddapc
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: ddapc_restraint_type,&
                                               dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set
    USE cp_ddapc_forces,                 ONLY: ewald_ddapc_force,&
                                               reset_ch_pulay,&
                                               restraint_functional_force,&
@@ -29,9 +32,6 @@ MODULE cp_ddapc
                                               cp_logger_type
    USE cp_output_handling,              ONLY: cp_print_key_finished_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set
    USE input_constants,                 ONLY: do_spin_density
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type
@@ -118,7 +118,7 @@ CONTAINS
 
       IF (dft_control%qs_control%ddapc_restraint) THEN
          ddapc_size = SIZE(dft_control%qs_control%ddapc_restraint_control)
-         IF (SIZE(energy%ddapc_restraint) .NE. ddapc_size) THEN
+         IF (SIZE(energy%ddapc_restraint) /= ddapc_size) THEN
             DEALLOCATE (energy%ddapc_restraint)
             ALLOCATE (energy%ddapc_restraint(ddapc_size))
          END IF

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,6 +15,9 @@ MODULE mp2_ri_grad_util
    USE cp_blacs_env,                    ONLY: cp_blacs_env_create,&
                                               cp_blacs_env_release,&
                                               cp_blacs_env_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type,&
+                                              dbcsr_type,&
+                                              dbcsr_type_no_symmetry
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
                                               cp_dbcsr_m_by_n_from_template
    USE cp_fm_basic_linalg,              ONLY: cp_fm_geadd
@@ -22,12 +25,12 @@ MODULE mp2_ri_grad_util
                                               cp_fm_struct_get,&
                                               cp_fm_struct_release,&
                                               cp_fm_struct_type
-   USE cp_fm_types,                     ONLY: &
-        cp_fm_create, cp_fm_get_info, cp_fm_indxg2l, cp_fm_indxg2p, cp_fm_indxl2g, cp_fm_release, &
-        cp_fm_set_all, cp_fm_to_fm, cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_p_type,&
-                                              dbcsr_type,&
-                                              dbcsr_type_no_symmetry
+   USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_get_info,&
+                                              cp_fm_release,&
+                                              cp_fm_set_all,&
+                                              cp_fm_to_fm,&
+                                              cp_fm_type
    USE group_dist_types,                ONLY: create_group_dist,&
                                               get_group_dist,&
                                               group_dist_d1_type,&
@@ -54,7 +57,7 @@ MODULE mp2_ri_grad_util
 
    TYPE index_map
       INTEGER, DIMENSION(:, :), ALLOCATABLE :: map
-   END TYPE
+   END TYPE index_map
 
 CONTAINS
 
@@ -257,15 +260,15 @@ CONTAINS
 
       ! now redistribute the data, in this case we go back
       ! to the original way the integrals were distributed
-      CALL fm2array(Gamma_2D, my_ia_size, my_ia_start, my_ia_end, &
-                    my_group_L_size, my_group_L_start, my_group_L_end, &
+      CALL fm2array(Gamma_2D, my_ia_start, my_ia_end, &
+                    my_group_L_start, my_group_L_end, &
                     group_grid_2_mepos, mepos_2_grid_group, &
                     para_env_sub%num_pe, ngroup, &
                     fm_Gamma)
 
       ALLOCATE (Gamma_PQ(my_P_size, my_group_L_size))
-      CALL fm2array(Gamma_PQ, my_P_size, my_P_start, my_P_end, &
-                    my_group_L_size, my_group_L_start, my_group_L_end, &
+      CALL fm2array(Gamma_PQ, my_P_start, my_P_end, &
+                    my_group_L_start, my_group_L_end, &
                     group_grid_2_mepos, mepos_2_grid_group, &
                     para_env_sub%num_pe, ngroup, &
                     fm_Gamma_PQ)
@@ -278,8 +281,8 @@ CONTAINS
 
       IF (.NOT. compare_potential_types(mp2_env%ri_metric, mp2_env%potential_parameter)) THEN
          ALLOCATE (Gamma_PQ(my_P_size, my_group_L_size))
-         CALL fm2array(Gamma_PQ, my_P_size, my_P_start, my_P_end, &
-                       my_group_L_size, my_group_L_start, my_group_L_end, &
+         CALL fm2array(Gamma_PQ, my_P_start, my_P_end, &
+                       my_group_L_start, my_group_L_end, &
                        group_grid_2_mepos, mepos_2_grid_group, &
                        para_env_sub%num_pe, ngroup, &
                        fm_Gamma_PQ_2)
@@ -509,12 +512,11 @@ CONTAINS
 
       INTEGER :: dummy_proc, end_col_block, end_row_block, handle, handle2, i_global, i_local, &
          i_sub, iiB, iii, itmp(2), j_global, j_local, j_sub, jjB, my_num_col_blocks, &
-         my_num_row_blocks, mypcol, myprow, ncol_block, ncol_local, npcol, nprow, nrow_block, &
-         nrow_local, num_cols, num_rec_cols, num_rows, number_of_rec, number_of_send, &
-         proc_receive, proc_send, proc_shift, rec_col_end, rec_col_size, rec_col_start, &
-         rec_counter, rec_pcol, rec_prow, rec_row_end, rec_row_size, rec_row_start, ref_send_pcol, &
-         ref_send_prow, send_counter, send_pcol, send_prow, size_rec_buffer, size_send_buffer
-      INTEGER :: start_col_block, start_row_block
+         my_num_row_blocks, mypcol, myprow, ncol_local, npcol, nprow, nrow_local, num_cols, &
+         num_rec_cols, num_rows, number_of_rec, number_of_send, proc_receive, proc_send, &
+         proc_shift, rec_col_end, rec_col_size, rec_col_start, rec_counter, rec_pcol, rec_prow, &
+         rec_row_end, rec_row_size, rec_row_start, ref_send_pcol, ref_send_prow, send_counter, &
+         send_pcol, send_prow, size_rec_buffer, size_send_buffer, start_col_block, start_row_block
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: iii_vet, index_col_rec, map_rec_size, &
                                                             map_send_size
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: blocks_ranges_col, blocks_ranges_row, &
@@ -545,9 +547,7 @@ CONTAINS
                           nrow_local=nrow_local, &
                           ncol_local=ncol_local, &
                           row_indices=row_indices, &
-                          col_indices=col_indices, &
-                          nrow_block=nrow_block, &
-                          ncol_block=ncol_block)
+                          col_indices=col_indices)
       myprow = fm_mat%matrix_struct%context%mepos(1)
       mypcol = fm_mat%matrix_struct%context%mepos(2)
       nprow = fm_mat%matrix_struct%context%num_pe(1)
@@ -570,11 +570,9 @@ CONTAINS
       map_send_size = 0
       dummy_proc = 0
       DO jjB = my_start_col, my_end_col
-         send_pcol = cp_fm_indxg2p(jjB, ncol_block, dummy_proc, &
-                                   fm_mat%matrix_struct%first_p_pos(2), npcol)
+         send_pcol = fm_mat%matrix_struct%g2p_col(jjB)
          DO iiB = my_start_row, my_end_row
-            send_prow = cp_fm_indxg2p(iiB, nrow_block, dummy_proc, &
-                                      fm_mat%matrix_struct%first_p_pos(1), nprow)
+            send_prow = fm_mat%matrix_struct%g2p_row(iiB)
             proc_send = grid_2_mepos(send_prow, send_pcol)
             map_send_size(proc_send) = map_send_size(proc_send) + 1
          END DO
@@ -606,7 +604,7 @@ CONTAINS
 
          IF (convert_pos) THEN
             ! if the group is not in the same RPA group cycle
-            IF ((rec_prow/integ_group_size) .NE. color_group) CYCLE
+            IF ((rec_prow/integ_group_size) /= color_group) CYCLE
             ! convert global position to position into the RPA group
             rec_prow = MOD(rec_prow, integ_group_size)
          END IF
@@ -691,11 +689,9 @@ CONTAINS
       ALLOCATE (iii_vet(number_of_send))
       iii_vet = 0
       DO iiB = my_start_row, my_end_row
-         send_prow = cp_fm_indxg2p(iiB, nrow_block, dummy_proc, &
-                                   fm_mat%matrix_struct%first_p_pos(1), nprow)
+         send_prow = fm_mat%matrix_struct%g2p_row(iiB)
          DO jjB = my_start_col, my_end_col
-            send_pcol = cp_fm_indxg2p(jjB, ncol_block, dummy_proc, &
-                                      fm_mat%matrix_struct%first_p_pos(2), npcol)
+            send_pcol = fm_mat%matrix_struct%g2p_col(jjB)
             ! we don't need to send to ourselves
             IF (grid_2_mepos(send_prow, send_pcol) == para_env%mepos) CYCLE
 
@@ -823,8 +819,7 @@ CONTAINS
                end_col_block = MIN(blocks_ranges_col(2, jjB), rec_col_end)
                DO j_sub = start_col_block, end_col_block
                   iii = iii + 1
-                  j_local = cp_fm_indxg2l(j_sub, ncol_block, dummy_proc, &
-                                          fm_mat%matrix_struct%first_p_pos(2), npcol)
+                  j_local = fm_mat%matrix_struct%g2l_col(j_sub)
                   index_col_rec(iii) = j_local
                END DO
             END DO
@@ -840,8 +835,7 @@ CONTAINS
                start_row_block = MAX(blocks_ranges_row(1, iiB), rec_row_start)
                end_row_block = MIN(blocks_ranges_row(2, iiB), rec_row_end)
                DO i_sub = start_row_block, end_row_block
-                  i_local = cp_fm_indxg2l(i_sub, nrow_block, dummy_proc, &
-                                          fm_mat%matrix_struct%first_p_pos(1), nprow)
+                  i_local = fm_mat%matrix_struct%g2l_row(i_sub)
                   DO jjB = 1, num_rec_cols
                      iii = iii + 1
                      j_local = index_col_rec(jjB)
@@ -882,10 +876,8 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief redistribute fm to local part of array
 !> \param mat2D ...
-!> \param my_rows ...
 !> \param my_start_row ...
 !> \param my_end_row ...
-!> \param my_cols ...
 !> \param my_start_col ...
 !> \param my_end_col ...
 !> \param group_grid_2_mepos ...
@@ -894,26 +886,26 @@ CONTAINS
 !> \param ngroup_col ...
 !> \param fm_mat ...
 ! **************************************************************************************************
-   SUBROUTINE fm2array(mat2D, my_rows, my_start_row, my_end_row, &
-                       my_cols, my_start_col, my_end_col, &
+   SUBROUTINE fm2array(mat2D, my_start_row, my_end_row, &
+                       my_start_col, my_end_col, &
                        group_grid_2_mepos, mepos_2_grid_group, &
                        ngroup_row, ngroup_col, &
                        fm_mat)
 
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :), &
          INTENT(OUT)                                     :: mat2D
-      INTEGER, INTENT(IN)                                :: my_rows, my_start_row, my_end_row, &
-                                                            my_cols, my_start_col, my_end_col
+      INTEGER, INTENT(IN)                                :: my_start_row, my_end_row, my_start_col, &
+                                                            my_end_col
       INTEGER, ALLOCATABLE, DIMENSION(:, :), INTENT(IN)  :: group_grid_2_mepos, mepos_2_grid_group
       INTEGER, INTENT(IN)                                :: ngroup_row, ngroup_col
       TYPE(cp_fm_type), INTENT(INOUT)                    :: fm_mat
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'fm2array'
 
-      INTEGER :: dummy_proc, handle, handle2, i_global, iiB, iii, itmp(2), j_global, jjB, mypcol, &
-         myprow, ncol_block, ncol_local, npcol, nprow, nrow_block, nrow_local, num_cols, &
-         num_rec_rows, num_rows, number_of_rec, number_of_send, proc_receive, proc_send, &
-         proc_shift, rec_col_size, rec_counter, rec_pcol, rec_prow, rec_row_size, ref_send_pcol, &
+      INTEGER :: dummy_proc, handle, handle2, i_global, iiB, iii, itmp(2), j_global, jjB, my_cols, &
+         my_rows, mypcol, myprow, ncol_local, npcol, nprow, nrow_local, num_cols, num_rec_rows, &
+         num_rows, number_of_rec, number_of_send, proc_receive, proc_send, proc_shift, &
+         rec_col_size, rec_counter, rec_pcol, rec_prow, rec_row_size, ref_send_pcol, &
          ref_send_prow, send_counter, send_pcol, send_prow, size_rec_buffer, size_send_buffer
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: iii_vet, index_row_rec, map_rec_size, &
                                                             map_send_size
@@ -928,6 +920,10 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! number of elements in each dimension
+      my_rows = my_end_row - my_start_row + 1
+      my_cols = my_end_col - my_start_col + 1
+
       ! allocate the array
       ALLOCATE (mat2D(my_rows, my_cols))
       mat2D = 0.0_dp
@@ -939,8 +935,6 @@ CONTAINS
                           ncol_local=ncol_local, &
                           row_indices=row_indices, &
                           col_indices=col_indices, &
-                          nrow_block=nrow_block, &
-                          ncol_block=ncol_block, &
                           nrow_global=num_rows, &
                           ncol_global=num_cols, &
                           para_env=para_env)
@@ -1009,11 +1003,9 @@ CONTAINS
       map_rec_size = 0
       dummy_proc = 0
       DO jjB = my_start_col, my_end_col
-         rec_pcol = cp_fm_indxg2p(jjB, ncol_block, dummy_proc, &
-                                  fm_mat%matrix_struct%first_p_pos(2), npcol)
+         rec_pcol = fm_mat%matrix_struct%g2p_col(jjB)
          DO iiB = my_start_row, my_end_row
-            rec_prow = cp_fm_indxg2p(iiB, nrow_block, dummy_proc, &
-                                     fm_mat%matrix_struct%first_p_pos(1), nprow)
+            rec_prow = fm_mat%matrix_struct%g2p_row(iiB)
             proc_receive = grid_2_mepos(rec_prow, rec_pcol)
             map_rec_size(proc_receive) = map_rec_size(proc_receive) + 1
          END DO
@@ -1190,8 +1182,7 @@ CONTAINS
             ! precompute the indeces of the rows
             num_rec_rows = 0
             DO iiB = 1, rec_row_size
-               i_global = cp_fm_indxl2g(iiB, nrow_block, mepos_2_grid(1, proc_receive), &
-                                        fm_mat%matrix_struct%first_p_pos(1), nprow)
+               i_global = fm_mat%matrix_struct%l2g_row(iiB, mepos_2_grid(1, proc_receive))
                IF (i_global >= my_start_row .AND. i_global <= my_end_row) THEN
                   num_rec_rows = num_rec_rows + 1
                   index_row_rec(num_rec_rows) = i_global
@@ -1202,8 +1193,7 @@ CONTAINS
 
             iii = 0
             DO jjB = 1, rec_col_size
-               j_global = cp_fm_indxl2g(jjB, ncol_block, mepos_2_grid(2, proc_receive), &
-                                        fm_mat%matrix_struct%first_p_pos(2), npcol)
+               j_global = fm_mat%matrix_struct%l2g_col(jjB, mepos_2_grid(2, proc_receive))
                IF (j_global >= my_start_col .AND. j_global <= my_end_col) THEN
                   DO iiB = 1, num_rec_rows
                      i_global = index_row_rec(iiB)
@@ -1262,11 +1252,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'create_dbcsr_gamma'
 
       INTEGER :: dummy_proc, handle, i_global, i_local, iaia, iiB, iii, itmp(2), j_global, &
-         j_local, jjB, jjj, kkB, mypcol, myprow, ncol_block, ncol_local, npcol, nprow, nrow_block, &
-         nrow_local, number_of_rec, number_of_send, proc_receive, proc_send, proc_shift, &
-         rec_counter, rec_iaia_end, rec_iaia_size, rec_iaia_start, rec_pcol, rec_prow, &
-         ref_send_pcol, ref_send_prow, send_counter, send_pcol, send_prow, size_rec_buffer, &
-         size_send_buffer
+         j_local, jjB, jjj, kkB, mypcol, myprow, ncol_local, npcol, nprow, nrow_local, &
+         number_of_rec, number_of_send, proc_receive, proc_send, proc_shift, rec_counter, &
+         rec_iaia_end, rec_iaia_size, rec_iaia_start, rec_pcol, rec_prow, ref_send_pcol, &
+         ref_send_prow, send_counter, send_pcol, send_prow, size_rec_buffer, size_send_buffer
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: iii_vet, map_rec_size, map_send_size
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: grid_2_mepos, grid_ref_2_send_pos, &
                                                             indeces_map_my, mepos_2_grid
@@ -1301,9 +1290,7 @@ CONTAINS
                           nrow_local=nrow_local, &
                           ncol_local=ncol_local, &
                           row_indices=row_indices, &
-                          col_indices=col_indices, &
-                          nrow_block=nrow_block, &
-                          ncol_block=ncol_block)
+                          col_indices=col_indices)
       myprow = fm_ia%matrix_struct%context%mepos(1)
       mypcol = fm_ia%matrix_struct%context%mepos(2)
       nprow = fm_ia%matrix_struct%context%num_pe(1)
@@ -1326,10 +1313,8 @@ CONTAINS
       DO iaia = my_ia_start, my_ia_end
          i_global = (iaia - 1)/virtual + 1
          j_global = MOD(iaia - 1, virtual) + 1
-         send_prow = cp_fm_indxg2p(i_global, nrow_block, dummy_proc, &
-                                   fm_ia%matrix_struct%first_p_pos(1), nprow)
-         send_pcol = cp_fm_indxg2p(j_global, ncol_block, dummy_proc, &
-                                   fm_ia%matrix_struct%first_p_pos(2), npcol)
+         send_prow = fm_ia%matrix_struct%g2p_row(i_global)
+         send_pcol = fm_ia%matrix_struct%g2p_col(j_global)
          proc_send = grid_2_mepos(send_prow, send_pcol)
          map_send_size(proc_send) = map_send_size(proc_send) + 1
       END DO
@@ -1419,16 +1404,12 @@ CONTAINS
             DO iaia = rec_iaia_start, rec_iaia_end
                i_global = (iaia - 1)/virtual + 1
                j_global = MOD(iaia - 1, virtual) + 1
-               rec_prow = cp_fm_indxg2p(i_global, nrow_block, dummy_proc, &
-                                        fm_ia%matrix_struct%first_p_pos(1), nprow)
-               rec_pcol = cp_fm_indxg2p(j_global, ncol_block, dummy_proc, &
-                                        fm_ia%matrix_struct%first_p_pos(2), npcol)
+               rec_prow = fm_ia%matrix_struct%g2p_row(i_global)
+               rec_pcol = fm_ia%matrix_struct%g2p_col(j_global)
                IF (grid_2_mepos(rec_prow, rec_pcol) /= para_env_sub%mepos) CYCLE
                iii = iii + 1
-               i_local = cp_fm_indxg2l(i_global, nrow_block, dummy_proc, &
-                                       fm_ia%matrix_struct%first_p_pos(1), nprow)
-               j_local = cp_fm_indxg2l(j_global, ncol_block, dummy_proc, &
-                                       fm_ia%matrix_struct%first_p_pos(2), npcol)
+               i_local = fm_ia%matrix_struct%g2l_row(i_global)
+               j_local = fm_ia%matrix_struct%g2l_col(j_global)
                indeces_rec(rec_counter)%map(1, iii) = i_local
                indeces_rec(rec_counter)%map(2, iii) = j_local
             END DO
@@ -1443,16 +1424,12 @@ CONTAINS
          DO iaia = my_ia_start, my_ia_end
             i_global = (iaia - 1)/virtual + 1
             j_global = MOD(iaia - 1, virtual) + 1
-            rec_prow = cp_fm_indxg2p(i_global, nrow_block, dummy_proc, &
-                                     fm_ia%matrix_struct%first_p_pos(1), nprow)
-            rec_pcol = cp_fm_indxg2p(j_global, ncol_block, dummy_proc, &
-                                     fm_ia%matrix_struct%first_p_pos(2), npcol)
+            rec_prow = fm_ia%matrix_struct%g2p_row(i_global)
+            rec_pcol = fm_ia%matrix_struct%g2p_col(j_global)
             IF (grid_2_mepos(rec_prow, rec_pcol) /= para_env_sub%mepos) CYCLE
             iii = iii + 1
-            i_local = cp_fm_indxg2l(i_global, nrow_block, dummy_proc, &
-                                    fm_ia%matrix_struct%first_p_pos(1), nprow)
-            j_local = cp_fm_indxg2l(j_global, ncol_block, dummy_proc, &
-                                    fm_ia%matrix_struct%first_p_pos(2), npcol)
+            i_local = fm_ia%matrix_struct%g2l_row(i_global)
+            j_local = fm_ia%matrix_struct%g2l_col(j_global)
             indeces_map_my(1, iii) = i_local
             indeces_map_my(2, iii) = j_local
          END DO
@@ -1486,10 +1463,8 @@ CONTAINS
          DO iaia = my_ia_start, my_ia_end
             i_global = (iaia - 1)/virtual + 1
             j_global = MOD(iaia - 1, virtual) + 1
-            send_prow = cp_fm_indxg2p(i_global, nrow_block, dummy_proc, &
-                                      fm_ia%matrix_struct%first_p_pos(1), nprow)
-            send_pcol = cp_fm_indxg2p(j_global, ncol_block, dummy_proc, &
-                                      fm_ia%matrix_struct%first_p_pos(2), npcol)
+            send_prow = fm_ia%matrix_struct%g2p_row(i_global)
+            send_pcol = fm_ia%matrix_struct%g2p_col(j_global)
             proc_send = grid_2_mepos(send_prow, send_pcol)
             ! we don't need to send to ourselves
             IF (grid_2_mepos(send_prow, send_pcol) == para_env_sub%mepos) THEN

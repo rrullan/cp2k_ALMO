@@ -1,10 +1,11 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2026 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,6 +25,7 @@ void grid_create_basis_set(const int nset, const int nsgf, const int maxco,
                            grid_basis_set **basis_set_out) {
 
   grid_basis_set *basis_set = malloc(sizeof(grid_basis_set));
+  assert(basis_set != NULL);
 
   basis_set->nset = nset;
   basis_set->nsgf = nsgf;
@@ -32,21 +34,36 @@ void grid_create_basis_set(const int nset, const int nsgf, const int maxco,
 
   size_t size = nset * sizeof(int);
   basis_set->lmin = malloc(size);
-  memcpy(basis_set->lmin, lmin, size);
+  assert(basis_set->lmin != NULL || size == 0);
   basis_set->lmax = malloc(size);
-  memcpy(basis_set->lmax, lmax, size);
+  assert(basis_set->lmax != NULL || size == 0);
   basis_set->npgf = malloc(size);
-  memcpy(basis_set->npgf, npgf, size);
+  assert(basis_set->npgf != NULL || size == 0);
   basis_set->nsgf_set = malloc(size);
-  memcpy(basis_set->nsgf_set, nsgf_set, size);
+  assert(basis_set->nsgf_set != NULL || size == 0);
   basis_set->first_sgf = malloc(size);
-  memcpy(basis_set->first_sgf, first_sgf, size);
+  assert(basis_set->first_sgf != NULL || size == 0);
+  if (size != 0) {
+    memcpy(basis_set->lmin, lmin, size);
+    memcpy(basis_set->lmax, lmax, size);
+    memcpy(basis_set->npgf, npgf, size);
+    memcpy(basis_set->nsgf_set, nsgf_set, size);
+    memcpy(basis_set->first_sgf, first_sgf, size);
+  }
+
   size = nsgf * maxco * sizeof(double);
   basis_set->sphi = malloc(size);
-  memcpy(basis_set->sphi, sphi, size);
+  assert(basis_set->sphi != NULL || size == 0);
+  if (size != 0) {
+    memcpy(basis_set->sphi, sphi, size);
+  }
+
   size = nset * maxpgf * sizeof(double);
   basis_set->zet = malloc(size);
-  memcpy(basis_set->zet, zet, size);
+  assert(basis_set->zet != NULL || size == 0);
+  if (size != 0) {
+    memcpy(basis_set->zet, zet, size);
+  }
 
   *basis_set_out = basis_set;
 }

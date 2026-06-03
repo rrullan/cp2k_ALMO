@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -27,7 +27,7 @@ MODULE submatrix_types
    END TYPE extvec_type
 
    TYPE, PUBLIC :: set_type
-      TYPE(extvec_type), DIMENSION(0:set_modulus - 1) :: data
+      TYPE(extvec_type), DIMENSION(0:set_modulus - 1) :: data = extvec_type()
       INTEGER, DIMENSION(:), ALLOCATABLE       :: sorted
       INTEGER                                  :: elements = 0
       LOGICAL                                  :: sorted_up_to_date = .FALSE.
@@ -41,7 +41,7 @@ MODULE submatrix_types
    END TYPE set_type
 
    TYPE, PUBLIC :: intBuffer_type
-      INTEGER, DIMENSION(:), POINTER                    :: data
+      INTEGER, DIMENSION(:), POINTER                    :: data => NULL()
       INTEGER                                           :: size = 0
       LOGICAL                                           :: allocated = .FALSE.
       TYPE(mp_request_type)                                           :: mpi_request = mp_request_null
@@ -52,7 +52,7 @@ MODULE submatrix_types
 
    ! TODO: Make data type generic
    TYPE, PUBLIC :: buffer_type
-      REAL(KIND=dp), DIMENSION(:), POINTER     :: data
+      REAL(KIND=dp), DIMENSION(:), POINTER     :: data => NULL()
       INTEGER                                           :: size = 0
       LOGICAL                                           :: allocated = .FALSE.
       TYPE(mp_request_type)                                           :: mpi_request = mp_request_null
@@ -81,11 +81,11 @@ CONTAINS
       INTEGER, INTENT(IN)                     :: elem
       INTEGER, DIMENSION(:), ALLOCATABLE      :: tmp
 
-      IF (this%allocated .EQ. 0) THEN
+      IF (this%allocated == 0) THEN
          this%allocated = extvec_initial_alloc
          ALLOCATE (this%darr(this%allocated))
       ELSE
-         IF (this%elements .EQ. this%allocated) THEN
+         IF (this%elements == this%allocated) THEN
             ALLOCATE (tmp(this%allocated))
             tmp(:) = this%darr
             DEALLOCATE (this%darr)
@@ -161,7 +161,7 @@ CONTAINS
       idx = MODULO(elem, set_modulus)
 
       DO i = 1, this%data(idx)%elements
-         IF (this%data(idx)%darr(i) .EQ. elem) THEN
+         IF (this%data(idx)%darr(i) == elem) THEN
             found = .TRUE.
             EXIT
          END IF
@@ -213,7 +213,7 @@ CONTAINS
 
       idx = 1
       DO i = 0, set_modulus - 1
-         IF (this%data(i)%elements .GT. 0) THEN
+         IF (this%data(i)%elements > 0) THEN
             this%sorted(idx:idx + this%data(i)%elements - 1) = this%data(i)%darr(1:this%data(i)%elements)
             idx = idx + this%data(i)%elements
          END IF

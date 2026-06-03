@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2026 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -31,31 +31,31 @@ MODULE qs_tddfpt2_stda_types
    PRIVATE
 
    TYPE stda_kind_type
-      CHARACTER(LEN=2)                            :: symbol !element symbol
-      INTEGER                                     :: z !atomic_number
-      INTEGER                                     :: kind_number !kind number
-      REAL(KIND=dp)                               :: hardness_param !hardness_parameter eta
-      REAL(KIND=dp)                               :: rcut !cutoff radius for short-range Coulomb
-   END TYPE
+      CHARACTER(LEN=2)                            :: symbol = "" !element symbol
+      INTEGER                                     :: z = -1 !atomic_number
+      INTEGER                                     :: kind_number = -1 !kind number
+      REAL(KIND=dp)                               :: hardness_param = -1.0_dp !hardness_parameter eta
+      REAL(KIND=dp)                               :: rcut = -1.0_dp !cutoff radius for short-range Coulomb
+   END TYPE stda_kind_type
 
    TYPE stda_kind_p_type
-      TYPE(stda_kind_type), POINTER               :: kind_param
-   END TYPE
+      TYPE(stda_kind_type), POINTER               :: kind_param => NULL()
+   END TYPE stda_kind_p_type
 
    TYPE stda_env_type
       !fraction of non-local HF exchange
-      REAL(KIND=dp)                                :: hfx_fraction
-      LOGICAL                                      :: do_exchange
+      REAL(KIND=dp)                                :: hfx_fraction = -1.0_dp
+      LOGICAL                                      :: do_exchange = .FALSE.
       ! empirical parameters
-      REAL(KIND=dp)                                :: alpha_param
-      REAL(KIND=dp)                                :: beta_param
+      REAL(KIND=dp)                                :: alpha_param = -1.0_dp
+      REAL(KIND=dp)                                :: beta_param = -1.0_dp
       ! filter for TD matrix
-      REAL(KIND=dp)                                :: eps_td_filter
-      TYPE(stda_kind_p_type), DIMENSION(:), POINTER:: kind_param_set
+      REAL(KIND=dp)                                :: eps_td_filter = -1.0_dp
+      TYPE(stda_kind_p_type), DIMENSION(:), POINTER:: kind_param_set => NULL()
       !number of atomic orbitals, number of occupied orbitals
-      INTEGER, DIMENSION(2)                        :: n_ao
-      INTEGER, DIMENSION(2)                        :: nactive
-   END TYPE
+      INTEGER, DIMENSION(2)                        :: n_ao = -1
+      INTEGER, DIMENSION(2)                        :: nactive = -1
+   END TYPE stda_env_type
 
    !PARAMETERS
 !&<
@@ -69,7 +69,7 @@ MODULE qs_tddfpt2_stda_types
    !   Fr Ra Ac Th Pa U        Np Pu Am Cm Bk Cf Es Fm Md    No Lr  103
 
    REAL(KIND=dp), DIMENSION(1:nelem), PARAMETER, PRIVATE:: hardness = &
-         (/6.4299544220_dp, 12.544911890_dp, & ! 2 H-He
+         [6.4299544220_dp, 12.544911890_dp, & ! 2 H-He
            2.3745866560_dp, 3.4967633530_dp, 4.6190089720_dp, 5.7409789220_dp, &
            6.8624665290_dp, 7.9854357010_dp, 9.1064753720_dp, 10.23034050_dp, & ! 8 Li-Ne
            2.444141360_dp, 3.0146513830_dp, 3.5849070740_dp, 4.15513090_dp, &
@@ -96,11 +96,11 @@ MODULE qs_tddfpt2_stda_types
            1.9368567520_dp, 2.2305576050_dp, 2.5241204960_dp, 3.0436128480_dp, &
            3.4168675260_dp, 3.4049844440_dp, 3.9244199680_dp, 4.2180813280_dp, &
            4.5115926320_dp, 4.8050928950_dp, 5.0989816210_dp, 5.3926054620_dp, &
-           5.4606987930_dp/) ! 17 Fr-Lr
+           5.4606987930_dp] ! 17 Fr-Lr
 !&>
 
-   REAL(KIND=dp), DIMENSION(2), PARAMETER, PRIVATE:: alpha = (/1.420_dp, 0.480_dp/)
-   REAL(KIND=dp), DIMENSION(2), PARAMETER, PRIVATE:: beta = (/0.200_dp, 1.830_dp/)
+   REAL(KIND=dp), DIMENSION(2), PARAMETER, PRIVATE:: alpha = [1.420_dp, 0.480_dp]
+   REAL(KIND=dp), DIMENSION(2), PARAMETER, PRIVATE:: beta = [0.200_dp, 1.830_dp]
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_tddfpt2_stda_types'
 
